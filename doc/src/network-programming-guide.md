@@ -102,6 +102,63 @@ end
 
 To obtain the signal strength (in decibels) of the connection to the associated access point use [`network:sta_rssi/0`](./apidocs/erlang/eavmlib/network.md#sta_rssi0).
 
+## WiFi Scanning
+
+AtomVM provides the ability to scan for available WiFi networks using the [`network:wifi_scan/0,1`](./apidocs/erlang/eavmlib/network.md#wifi_scan0) functions. This functionality is useful for discovering available access points before attempting to connect, or for building WiFi network selection interfaces.
+
+To scan for WiFi networks, the network must first be initialized (typically in STA mode). You can scan without being connected to any network:
+
+```erlang
+% Initialize network (not connected to any AP)
+Config = [{sta, []}],
+{ok, _Pid} = network:start(Config),
+
+% Perform scan
+case network:wifi_scan() of
+    {ok, AccessPoints} ->
+        % AccessPoints is a list of maps, each containing:
+        % - ssid: Network name (binary)
+        % - bssid: MAC address of the AP (6-byte binary)
+        % - rssi: Signal strength in dBm (negative integer)
+        % - channel: WiFi channel number
+        % - authmode: Authentication mode (open, wep, wpa_psk, wpa2_psk, etc.)
+        io:format("Found ~p networks~n", [length(AccessPoints)]);
+    {error, Reason} ->
+        io:format("Scan failed: ~p~n", [Reason])
+end
+```
+
+The `wifi_scan/0` function uses a default timeout of 10 seconds. You can specify a custom timeout (in milliseconds) using `wifi_scan/1`:
+
+```erlang
+% Scan with 5 second timeout
+{ok, AccessPoints} = network:wifi_scan(5000)
+```
+
+Each access point in the returned list is a map with the following fields:
+
+* `ssid` - The network name as a binary (e.g., `<<"MyNetwork">>`)
+* `bssid` - The MAC address of the access point as a 6-byte binary
+* `rssi` - Signal strength in dBm (e.g., `-45` for strong signal, `-80` for weak)
+* `channel` - The WiFi channel number (1-14 for 2.4GHz, higher for 5GHz)
+* `authmode` - One of: `open`, `wep`, `wpa_psk`, `wpa2_psk`, `wpa_wpa2_psk`, `wpa2_enterprise`, `wpa3_psk`, `wpa2_wpa3_psk`, `wapi_psk`
+
+The scan returns up to 50 access points, ordered by discovery. Hidden networks (with empty SSID) are included in the results.
+
+Example of processing scan results:
+
+```erlang
+print_networks(AccessPoints) ->
+    lists:foreach(fun(AP) ->
+        SSID = maps:get(ssid, AP),
+        RSSI = maps:get(rssi, AP),
+        Channel = maps:get(channel, AP),
+        AuthMode = maps:get(authmode, AP),
+        io:format("~s (Channel ~p, ~p dBm, ~p)~n", 
+                  [SSID, Channel, RSSI, AuthMode])
+    end, AccessPoints).
+```
+
 ## AP mode
 
 In AP mode, the ESP32 starts a WiFi network to which other devices (laptops, mobile devices, other ESP32 devices, etc) can connect.  The ESP32 will create an IPv4 network, and will assign itself the address `192.168.4.1`.  Devices that attach to the ESP32 in AP mode will be assigned sequential addresses in the `192.168.4.0/24` range, e.g., `192.168.4.2`, `192.168.4.3`, etc.

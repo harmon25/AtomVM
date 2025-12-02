@@ -25,7 +25,8 @@
 -export([
     wait_for_sta/0, wait_for_sta/1, wait_for_sta/2,
     wait_for_ap/0, wait_for_ap/1, wait_for_ap/2,
-    sta_rssi/0
+    sta_rssi/0,
+    wifi_scan/0, wifi_scan/1
 ]).
 -export([start/1, start_link/1, stop/0]).
 -export([
@@ -152,6 +153,25 @@
 -type network_config() :: [sta_config() | ap_config() | sntp_config() | mdns_config()].
 
 -type db() :: integer().
+
+-type wifi_auth_mode() ::
+    open
+    | wep
+    | wpa_psk
+    | wpa2_psk
+    | wpa_wpa2_psk
+    | wpa2_enterprise
+    | wpa3_psk
+    | wpa2_wpa3_psk
+    | wapi_psk.
+
+-type ap_info() :: #{
+    ssid := binary(),
+    bssid := binary(),
+    rssi := db(),
+    channel := wifi_channel(),
+    authmode := wifi_auth_mode()
+}.
 
 -record(state, {
     config :: network_config(),
@@ -311,6 +331,63 @@ sta_rssi() ->
                 {Ref, {error, Reason}} -> {error, Reason};
                 {Ref, {rssi, Rssi}} -> {ok, Rssi};
                 Other -> {error, Other}
+            end
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @returns {ok, [ApInfo]} where ApInfo is a map with access point information,
+%%          or {error, Reason}.
+%%
+%% @equiv wifi_scan(10000)
+%% @doc     Scan for available WiFi networks.
+%%
+%%          This function will scan for available WiFi access points and return
+%%          a list of access point information maps. Each map contains:
+%%          - ssid: The network name (binary)
+%%          - bssid: The MAC address of the access point (6-byte binary)
+%%          - rssi: Signal strength in dBm (negative integer)
+%%          - channel: WiFi channel number
+%%          - authmode: Authentication mode (open, wep, wpa_psk, wpa2_psk, etc.)
+%%
+%%          Note: WiFi must be initialized (network started) before scanning.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec wifi_scan() -> {ok, [ap_info()]} | {error, Reason :: term()}.
+wifi_scan() ->
+    wifi_scan(10000).
+
+%%-----------------------------------------------------------------------------
+%% @param   Timeout timeout in milliseconds to wait for scan completion
+%% @returns {ok, [ApInfo]} where ApInfo is a map with access point information,
+%%          or {error, Reason}.
+%%
+%% @doc     Scan for available WiFi networks with timeout.
+%%
+%%          This function will scan for available WiFi access points and return
+%%          a list of access point information maps. Each map contains:
+%%          - ssid: The network name (binary)
+%%          - bssid: The MAC address of the access point (6-byte binary)
+%%          - rssi: Signal strength in dBm (negative integer)
+%%          - channel: WiFi channel number
+%%          - authmode: Authentication mode (open, wep, wpa_psk, wpa2_psk, etc.)
+%%
+%%          Note: WiFi must be initialized (network started) before scanning.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec wifi_scan(Timeout :: non_neg_integer()) -> {ok, [ap_info()]} | {error, Reason :: term()}.
+wifi_scan(Timeout) ->
+    case whereis(network_port) of
+        undefined ->
+            {error, network_down};
+        Port ->
+            Ref = make_ref(),
+            Port ! {self(), Ref, scan},
+            receive
+                {Ref, {ok, ApList}} -> {ok, ApList};
+                {Ref, {error, Reason}} -> {error, Reason};
+                Other -> {error, Other}
+            after Timeout ->
+                {error, timeout}
             end
     end.
 

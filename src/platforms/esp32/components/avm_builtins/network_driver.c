@@ -80,6 +80,18 @@ static const char *const sta_beacon_timeout_atom = ATOM_STR("\x12", "sta_beacon_
 static const char *const sta_disconnected_atom = ATOM_STR("\x10", "sta_disconnected");
 static const char *const sta_got_ip_atom = ATOM_STR("\xA", "sta_got_ip");
 static const char *const network_down_atom = ATOM_STR("\x0C", "network_down");
+static const char *const bssid_atom = ATOM_STR("\x5", "bssid");
+static const char *const authmode_atom = ATOM_STR("\x8", "authmode");
+static const char *const channel_atom = ATOM_STR("\x7", "channel");
+static const char *const open_atom = ATOM_STR("\x4", "open");
+static const char *const wep_atom = ATOM_STR("\x3", "wep");
+static const char *const wpa_psk_atom = ATOM_STR("\x7", "wpa_psk");
+static const char *const wpa2_psk_atom = ATOM_STR("\x8", "wpa2_psk");
+static const char *const wpa_wpa2_psk_atom = ATOM_STR("\xC", "wpa_wpa2_psk");
+static const char *const wpa2_enterprise_atom = ATOM_STR("\x10", "wpa2_enterprise");
+static const char *const wpa3_psk_atom = ATOM_STR("\x8", "wpa3_psk");
+static const char *const wpa2_wpa3_psk_atom = ATOM_STR("\xC", "wpa2_wpa3_psk");
+static const char *const wapi_psk_atom = ATOM_STR("\x8", "wapi_psk");
 
 ESP_EVENT_DECLARE_BASE(sntp_event_base);
 ESP_EVENT_DEFINE_BASE(sntp_event_base);
@@ -92,15 +104,17 @@ enum
 enum network_cmd
 {
     NetworkInvalidCmd = 0,
-    // TODO add support for scan, ifconfig
+    // TODO add support for ifconfig
     NetworkStartCmd,
     NetworkRssiCmd,
+    NetworkScanCmd,
     NetworkStopCmd
 };
 
 static const AtomStringIntPair cmd_table[] = {
     { ATOM_STR("\x5", "start"), NetworkStartCmd },
     { ATOM_STR("\x4", "rssi"), NetworkRssiCmd },
+    { ATOM_STR("\x4", "scan"), NetworkScanCmd },
     { ATOM_STR("\x4", "stop"), NetworkStopCmd },
     SELECT_INT_DEFAULT(NetworkInvalidCmd)
 };
@@ -846,6 +860,148 @@ static void stop_network(Context *ctx)
     }
 }
 
+static term authmode_to_atom(GlobalContext *global, wifi_auth_mode_t authmode)
+{
+    switch (authmode) {
+        case WIFI_AUTH_OPEN:
+            return make_atom(global, open_atom);
+        case WIFI_AUTH_WEP:
+            return make_atom(global, wep_atom);
+        case WIFI_AUTH_WPA_PSK:
+            return make_atom(global, wpa_psk_atom);
+        case WIFI_AUTH_WPA2_PSK:
+            return make_atom(global, wpa2_psk_atom);
+        case WIFI_AUTH_WPA_WPA2_PSK:
+            return make_atom(global, wpa_wpa2_psk_atom);
+        case WIFI_AUTH_WPA2_ENTERPRISE:
+            return make_atom(global, wpa2_enterprise_atom);
+        case WIFI_AUTH_WPA3_PSK:
+            return make_atom(global, wpa3_psk_atom);
+        case WIFI_AUTH_WPA2_WPA3_PSK:
+            return make_atom(global, wpa2_wpa3_psk_atom);
+        case WIFI_AUTH_WAPI_PSK:
+            return make_atom(global, wapi_psk_atom);
+        default:
+            return make_atom(global, open_atom);
+    }
+}
+
+static void scan_wifi(Context *ctx, term pid, term ref)
+{
+    // Start WiFi scan
+    wifi_scan_config_t scan_config = {
+        .ssid = NULL,
+        .bssid = NULL,
+        .channel = 0,
+        .show_hidden = true,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE
+    };
+
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true); // blocking scan
+    if (UNLIKELY(err != ESP_OK)) {
+        ESP_LOGE(TAG, "WiFi scan failed to start: %d", err);
+        size_t tuple_reply_size = PORT_REPLY_SIZE + TUPLE_SIZE(2);
+        port_ensure_available(ctx, tuple_reply_size);
+        term error = port_create_error_tuple(ctx, term_from_int(err));
+        port_send_reply(ctx, pid, ref, error);
+        return;
+    }
+
+    // Get scan results
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    
+    if (ap_count == 0) {
+        // Return empty list
+        size_t tuple_reply_size = PORT_REPLY_SIZE + TUPLE_SIZE(2);
+        port_ensure_available(ctx, tuple_reply_size);
+        term empty_list = term_nil();
+        term reply = port_create_tuple2(ctx, OK_ATOM, empty_list);
+        port_send_reply(ctx, pid, ref, reply);
+        return;
+    }
+
+    // Limit to 50 APs max
+    if (ap_count > 50) {
+        ap_count = 50;
+    }
+
+    wifi_ap_record_t *ap_records = malloc(sizeof(wifi_ap_record_t) * ap_count);
+    if (ap_records == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate memory for scan results");
+        size_t tuple_reply_size = PORT_REPLY_SIZE + TUPLE_SIZE(2);
+        port_ensure_available(ctx, tuple_reply_size);
+        term error = port_create_error_tuple(ctx, OUT_OF_MEMORY_ATOM);
+        port_send_reply(ctx, pid, ref, error);
+        return;
+    }
+
+    err = esp_wifi_scan_get_ap_records(&ap_count, ap_records);
+    if (UNLIKELY(err != ESP_OK)) {
+        ESP_LOGE(TAG, "Failed to get scan records: %d", err);
+        free(ap_records);
+        size_t tuple_reply_size = PORT_REPLY_SIZE + TUPLE_SIZE(2);
+        port_ensure_available(ctx, tuple_reply_size);
+        term error = port_create_error_tuple(ctx, term_from_int(err));
+        port_send_reply(ctx, pid, ref, error);
+        return;
+    }
+
+    // Estimate heap size needed for response
+    // Each AP: map (approx 8 + 4*2 per entry) + ssid binary + bssid binary
+    size_t estimated_size = PORT_REPLY_SIZE + TUPLE_SIZE(2) + (ap_count * (TERM_MAP_SIZE(4) + 128));
+    
+    if (UNLIKELY(memory_ensure_free(ctx, estimated_size) != MEMORY_GC_OK)) {
+        ESP_LOGE(TAG, "Failed to allocate heap for scan results");
+        free(ap_records);
+        size_t tuple_reply_size = PORT_REPLY_SIZE + TUPLE_SIZE(2);
+        port_ensure_available(ctx, tuple_reply_size);
+        term error = port_create_error_tuple(ctx, OUT_OF_MEMORY_ATOM);
+        port_send_reply(ctx, pid, ref, error);
+        return;
+    }
+
+    // Build list of AP info maps
+    term ap_list = term_nil();
+    for (int i = ap_count - 1; i >= 0; i--) {
+        wifi_ap_record_t *ap = &ap_records[i];
+        
+        // Create SSID binary
+        size_t ssid_len = strnlen((char *)ap->ssid, 33);
+        term ssid_bin = term_from_literal_binary(ap->ssid, ssid_len, &ctx->heap, ctx->global);
+        
+        // Create BSSID binary (6 bytes MAC address)
+        term bssid_bin = term_from_literal_binary(ap->bssid, 6, &ctx->heap, ctx->global);
+        
+        // Create authmode atom
+        term authmode = authmode_to_atom(ctx->global, ap->authmode);
+        
+        // Create map with AP info
+        term ap_map = term_alloc_map(4, &ctx->heap);
+        term_set_map_assoc(ap_map, 0, make_atom(ctx->global, ssid_atom), ssid_bin);
+        term_set_map_assoc(ap_map, 1, make_atom(ctx->global, bssid_atom), bssid_bin);
+        term_set_map_assoc(ap_map, 2, make_atom(ctx->global, ATOM_STR("\x4", "rssi")), term_from_int(ap->rssi));
+        term_set_map_assoc(ap_map, 3, make_atom(ctx->global, channel_atom), term_from_int(ap->primary));
+        
+        // Add authmode as 5th entry
+        term ap_map_with_auth = term_alloc_map(5, &ctx->heap);
+        term_set_map_assoc(ap_map_with_auth, 0, make_atom(ctx->global, ssid_atom), ssid_bin);
+        term_set_map_assoc(ap_map_with_auth, 1, make_atom(ctx->global, bssid_atom), bssid_bin);
+        term_set_map_assoc(ap_map_with_auth, 2, make_atom(ctx->global, ATOM_STR("\x4", "rssi")), term_from_int(ap->rssi));
+        term_set_map_assoc(ap_map_with_auth, 3, make_atom(ctx->global, channel_atom), term_from_int(ap->primary));
+        term_set_map_assoc(ap_map_with_auth, 4, make_atom(ctx->global, authmode_atom), authmode);
+        
+        // Prepend to list
+        ap_list = term_list_prepend(ap_map_with_auth, ap_list, &ctx->heap);
+    }
+
+    free(ap_records);
+
+    // Send reply: {Ref, {ok, [#{ssid => ..., bssid => ..., rssi => ..., channel => ..., authmode => ...}]}}
+    term reply = port_create_tuple2(ctx, OK_ATOM, ap_list);
+    port_send_reply(ctx, pid, ref, reply);
+}
+
 static void get_sta_rssi(Context *ctx, term pid, term ref)
 {
     size_t tuple_reply_size = PORT_REPLY_SIZE + TUPLE_SIZE(2);
@@ -913,6 +1069,9 @@ static NativeHandlerResult consume_mailbox(Context *ctx)
                 break;
             case NetworkRssiCmd:
                 get_sta_rssi(ctx, pid, ref);
+                break;
+            case NetworkScanCmd:
+                scan_wifi(ctx, pid, ref);
                 break;
             case NetworkStopCmd:
                 cmd_terminate = true;
