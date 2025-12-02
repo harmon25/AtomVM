@@ -237,7 +237,7 @@ static const AtomStringIntPair otp_socket_setopt_level_table[] = {
     SELECT_INT_DEFAULT(OtpSocketInvalidSetoptLevel)
 };
 
-#define DEFAULT_BUFFER_SIZE 512
+#define DEFAULT_BUFFER_SIZE 1516
 
 #ifndef MIN
 #define MIN(A, B) (((A) < (B)) ? (A) : (B))
