@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "atom.h"
 #include "avm_version.h"
@@ -81,10 +82,24 @@ int main(int argc, char **argv)
         first_file_arg = i + 1;
     }
 
+    // For Spin compatibility: if no arguments provided, try default paths
+    const char *default_avm_paths[] = {"/test.avm", "/app.avm", "./app.avm", NULL};
     if (first_file_arg >= argc) {
-        fprintf(stderr, "Error: no .avm or .beam files specified.\n");
-        print_help(argv[0]);
-        return EXIT_FAILURE;
+        // Try default paths (useful for Spin deployment)
+        const char **path = default_avm_paths;
+        while (*path != NULL) {
+            if (access(*path, F_OK) == 0) {
+                argv[argc++] = (char *)*path;
+                first_file_arg = argc - 1;
+                break;
+            }
+            path++;
+        }
+        if (first_file_arg >= argc) {
+            fprintf(stderr, "Error: no .avm or .beam files specified.\n");
+            print_help(argv[0]);
+            return EXIT_FAILURE;
+        }
     }
 
     GlobalContext *glb = globalcontext_new();
