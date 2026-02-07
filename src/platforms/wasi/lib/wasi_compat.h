@@ -18,37 +18,26 @@
  * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
  */
 
-#include "platform_nifs.h"
+/**
+ * @file wasi_compat.h
+ * @brief Compatibility shims for functions missing from wasi-libc.
+ *
+ * @details This header is force-included (via -include) when compiling
+ * libAtomVM for the WASI target. It provides stubs for POSIX functions
+ * that wasi-libc declares but does not define, or excludes entirely.
+ */
 
-#include "defaultatoms.h"
-#include "nifs.h"
-#include "platform_defaultatoms.h"
-#include "term.h"
+#ifndef _WASI_COMPAT_H_
+#define _WASI_COMPAT_H_
 
-#include <string.h>
-
-// #define ENABLE_TRACE
-#include "trace.h"
-
-static term nif_atomvm_platform(Context *ctx, int argc, term argv[])
+/*
+ * wasi-libc excludes tzset() behind __wasilibc_unmodified_upstream because
+ * WASI has no timezone database. libAtomVM nifs.c calls tzset() for
+ * erlang:localtime/0. Provide a no-op inline.
+ */
+static inline void tzset(void)
 {
-    UNUSED(ctx);
-    UNUSED(argc);
-    UNUSED(argv);
-
-    return WASI_ATOM;
+    /* No-op: WASI has no timezone database */
 }
 
-static const struct Nif atomvm_platform_nif = {
-    .base.type = NIFFunctionType,
-    .nif_ptr = nif_atomvm_platform
-};
-
-const struct Nif *platform_nifs_get_nif(const char *nifname)
-{
-    if (strcmp("atomvm:platform/0", nifname) == 0) {
-        TRACE("Resolved platform nif %s ...\n", nifname);
-        return &atomvm_platform_nif;
-    }
-    return NULL;
-}
+#endif

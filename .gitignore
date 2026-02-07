@@ -32,3 +32,4 @@ src/platforms/esp32/dependencies.lock
 .DS_Store
 .cache
 .clang-tidy
+build-wasi/**

@@ -1,7 +1,7 @@
 /*
  * This file is part of AtomVM.
  *
- * Copyright 2019 by Fred Dushin <fred@dushin.net>
+ * Copyright 2025 AtomVM Contributors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,23 +18,35 @@
  * SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
  */
 
-#ifndef _GENERIC_UNIX_SYS_H_
-#define _GENERIC_UNIX_SYS_H_
+#ifndef _WASI_SYS_H_
+#define _WASI_SYS_H_
 
-#include <time.h>
+#include <list.h>
+#include <sys.h>
 
-#include "sys.h"
-#include "term_typedef.h"
-
+/**
+ * @brief WASI platform event listener type.
+ * @details On WASI, there is no fd-based I/O multiplexing (no poll/select/epoll).
+ * This type is defined to satisfy the listeners.h framework requirements but
+ * is not actively used in the MVP.
+ */
 typedef int listener_event_t;
 
 struct EventListener
 {
     struct ListHead listeners_list_head;
     event_handler_t handler;
-    listener_event_t fd;
+    int fd; // placeholder, not used in WASI MVP
 };
 
-Context *socket_init(GlobalContext *global, term opts);
+/**
+ * @brief WASI platform data.
+ * @details Minimal platform state for the WASI target. No event loop fds,
+ * no signal mechanism, no threading.
+ */
+struct WASIPlatformData
+{
+    int dummy; // Placeholder to avoid empty struct
+};
 
 #endif
