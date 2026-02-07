@@ -60,6 +60,45 @@ handle(#{method := Method, path := Path, headers := Headers, body := Body} = _Re
                 headers => [{<<"content-type">>, <<"application/json">>}],
                 body => <<"{\"message\":\"Hello from AtomVM\",\"platform\":\"wasi\"}">>
             };
+        <<"/proxy">> ->
+            %% Demonstrate outbound HTTP: fetch from httpbin and return the result
+            case spin_http:get(<<"https://httpbin.org/get">>) of
+                {ok, #{status := ProxyStatus, body := ProxyBody}} ->
+                    StatusBin = integer_to_binary(ProxyStatus),
+                    #{
+                        status => 200,
+                        headers => [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
+                        body => <<"Upstream status: ", StatusBin/binary, "\n\n", ProxyBody/binary>>
+                    };
+                {error, Reason} ->
+                    ErrBin = atom_to_binary(Reason, utf8),
+                    #{
+                        status => 502,
+                        headers => [{<<"content-type">>, <<"text/plain">>}],
+                        body => <<"Upstream request failed: ", ErrBin/binary>>
+                    }
+            end;
+        <<"/fetch">> ->
+            %% Fetch a URL passed as query parameter: /fetch?url=https://...
+            %% For simplicity, just POST to httpbin echo
+            case spin_http:post(
+                <<"https://httpbin.org/post">>,
+                [{<<"content-type">>, <<"application/json">>}],
+                <<"{\"from\":\"AtomVM\",\"message\":\"Hello from BEAM on WASM!\"}">>
+            ) of
+                {ok, #{body := RespBody}} ->
+                    #{
+                        status => 200,
+                        headers => [{<<"content-type">>, <<"application/json">>}],
+                        body => RespBody
+                    };
+                {error, _} ->
+                    #{
+                        status => 502,
+                        headers => [{<<"content-type">>, <<"text/plain">>}],
+                        body => <<"Failed to reach upstream">>
+                    }
+            end;
         _ ->
             %% 404 for unknown paths
             #{

@@ -47,6 +47,15 @@ static const struct Nif atomvm_platform_nif = {
     .nif_ptr = nif_atomvm_platform
 };
 
+// Extension point for HTTP component NIFs.
+// The HTTP target provides a strong definition; base AtomVM.wasm uses this no-op.
+__attribute__((weak))
+const struct Nif *wasi_http_nifs_get_nif(const char *nifname)
+{
+    UNUSED(nifname);
+    return NULL;
+}
+
 const struct Nif *platform_nifs_get_nif(const char *nifname)
 {
     if (strcmp("atomvm:platform/0", nifname) == 0) {
@@ -54,7 +63,12 @@ const struct Nif *platform_nifs_get_nif(const char *nifname)
         return &atomvm_platform_nif;
     }
 
-    const struct Nif *nif = otp_net_nif_get_nif(nifname);
+    const struct Nif *nif = wasi_http_nifs_get_nif(nifname);
+    if (nif) {
+        return nif;
+    }
+
+    nif = otp_net_nif_get_nif(nifname);
     if (nif) {
         return nif;
     }

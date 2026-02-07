@@ -98,6 +98,8 @@ if(AVM_BUILD_HTTP_COMPONENT)
     add_executable(AtomVM_http
         ${HTTP_DIR}/main_http.c
         ${HTTP_DIR}/wasi_http_handler.c
+        ${HTTP_DIR}/wasi_http_outbound.c
+        ${HTTP_DIR}/wasi_http_nifs.c
         ${HTTP_DIR}/generated/app.c
     )
     set_target_properties(AtomVM_http PROPERTIES

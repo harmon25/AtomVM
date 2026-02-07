@@ -69,6 +69,8 @@ defmodule SpinHandler do
       <li><a href="/info">/info</a> - request info</li>
       <li><a href="/json">/json</a> - JSON response</li>
       <li><a href="/compute">/compute</a> - run some computations</li>
+      <li><a href="/proxy">/proxy</a> - outbound HTTP (fetch httpbin.org)</li>
+      <li><a href="/fetch">/fetch</a> - outbound POST to httpbin echo</li>
       <li>POST <a href="/echo">/echo</a> - echo body back</li>
     </ul>
     </body>
@@ -159,6 +161,40 @@ defmodule SpinHandler do
     >>
 
     respond(200, "text/plain; charset=utf-8", text)
+  end
+
+  defp route(:get, <<"/proxy">>, _headers, _body) do
+    # Demonstrate outbound HTTP: fetch from httpbin
+    case :spin_http.get("https://httpbin.org/get") do
+      {:ok, %{status: upstream_status, body: upstream_body}} ->
+        status_bin = :erlang.integer_to_binary(upstream_status)
+
+        respond(200, "text/plain; charset=utf-8", <<
+          "Upstream status: ",
+          status_bin::binary,
+          "\n\n",
+          upstream_body::binary
+        >>)
+
+      {:error, reason} ->
+        err_bin = :erlang.atom_to_binary(reason, :utf8)
+        respond(502, "text/plain", <<"Upstream request failed: ", err_bin::binary>>)
+    end
+  end
+
+  defp route(:get, <<"/fetch">>, _headers, _body) do
+    # POST to httpbin echo
+    case :spin_http.post(
+           "https://httpbin.org/post",
+           [{"content-type", "application/json"}],
+           "{\"from\":\"Elixir on AtomVM\",\"runtime\":\"WASM\"}"
+         ) do
+      {:ok, %{body: resp_body}} ->
+        respond(200, "application/json", resp_body)
+
+      {:error, _} ->
+        respond(502, "text/plain", "Failed to reach upstream")
+    end
   end
 
   defp route(_method, _path, _headers, _body) do
