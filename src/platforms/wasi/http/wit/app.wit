@@ -1,0 +1,4 @@
+package test:host;
+world host {
+  export run: func();
+}

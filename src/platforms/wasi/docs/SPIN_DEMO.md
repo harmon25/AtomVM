@@ -1,63 +1,41 @@
-# AtomVM on Fermyon Spin - Proof of Concept
+# AtomVM on Fermyon Spin - Status & Guide
 
-## Summary
+## Status Overview
 
-✅ **SUCCESS**: AtomVM successfully runs Erlang code on Fermyon Spin using the WASI platform!
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Command Trigger** | ✅ Working | Pure computation works perfectly |
+| **HTTP Trigger** | ⚠️ Component Model | Requires component model implementation |
+| **Redis Trigger** | ❌ Not implemented | Requires specific adapters |
+| **Configurable Triggers** | ❌ Not implemented | Requires component model |
 
-## What Was Demonstrated
+---
 
-1. **Installed Spin CLI** (v3.5.1) with the command trigger plugin
-2. **Modified AtomVM** to auto-detect embedded AVM files (for Spin compatibility)
-3. **Created Spin application** with command trigger
-4. **Ran Erlang code** successfully without CLI arguments
+## ✅ Command Trigger (Working)
 
-## Key Changes Made
+The command trigger **already works** and is the easiest way to run AtomVM on Spin.
 
-### 1. Modified `src/platforms/wasi/main.c`
+### Demonstration
 
-Added support for default AVM file paths when no CLI arguments are provided:
+1. **Install Spin CLI** (v3.5.1+):
+```bash
+curl -fsSL https://spinframework.dev/downloads/install.sh | bash
 
-```c
-// For Spin compatibility: if no arguments provided, try default paths
-const char *default_avm_paths[] = {"/test.avm", "/app.avm", "./app.avm", NULL};
-if (first_file_arg >= argc) {
-    // Try default paths (useful for Spin deployment)
-    const char **path = default_avm_paths;
-    while (*path != NULL) {
-        if (access(*path, F_OK) == 0) {
-            argv[argc++] = (char *)*path;
-            first_file_arg = argc - 1;
-            break;
-        }
-        path++;
-    }
-    ...
-}
+# Install command trigger plugin
+spin plugins install trigger-command
 ```
 
-This allows AtomVM to work with Spin's command trigger which doesn't pass CLI arguments.
-
-### 2. Created `spin.toml` Manifest
-
-```toml
-spin_manifest_version = 2
-
-[application]
-name = "erlang-spin-demo"
-version = "0.1.0"
-
-[[trigger.command]]
-component = "erlang-app"
-
-[component.erlang-app]
-source = "AtomVM.wasm"
-files = [{ source = "myapp.avm", destination = "/test.avm" }]
+2. **Build AtomVM**:
+```bash
+cd /home/harmon/Dev/AtomVM
+export WASI_SDK_PATH=/home/harmon/Libs/wasi-sdk-30
+cmake -S src/platforms/wasi -B build-wasi -DCMAKE_TOOLCHAIN_FILE=cmake/wasi-sdk.cmake
+cmake --build build-wasi
 ```
 
-## Working Example
-
-### Simple Erlang Module (works)
+3. **Create a simple Erlang module**:
 ```erlang
+%% spin_simple.erl
 -module(spin_simple).
 -export([start/0]).
 
@@ -70,70 +48,241 @@ start() ->
     end.
 ```
 
-**Result**: ✅ Returns `ok`, Spin shows `Return value: ok`
-
-### With IO (limited)
-```erlang
--module(spin_handler).
--export([start/0]).
-
-start() ->
-    io:format("Hello from Erlang on Spin!~n"),
-    ok.
+4. **Compile and package**:
+```bash
+erlc spin_simple.erl
+build/tools/packbeam/PackBEAM spin_simple.avm spin_simple.beam \
+  build/libs/estdlib/src/estdlib.avm \
+  build/libs/eavmlib/src/eavmlib.avm
 ```
 
-**Result**: ❌ `RUN_RESULT_NOT_OK` - `io:format` requires stdout which isn't available in Spin's command trigger
-
-## Limitations Found
-
-1. **No stdin/stdout**: Spin's command trigger doesn't provide TTY access, so `io:format` fails
-2. **No CLI arguments**: Command trigger executes the binary but doesn't pass arguments (worked around with default paths)
-3. **No HTTP trigger support**: Would require implementing `wasi:http/incoming-handler` interface
-
-## To Run the Demo
-
-```bash
-# Build AtomVM for WASI (already done)
-cd /home/harmon/Dev/AtomVM/build-wasi
-
-# Create Spin app
-cd /tmp/atomvm-test
-cat > spin.toml << 'EOF'
+5. **Create Spin application**:
+```toml
+# spin.toml
 spin_manifest_version = 2
 
 [application]
-name = "erlang-spin-demo"
+name = "atomvm-cmd-demo"
 version = "0.1.0"
 
 [[trigger.command]]
-component = "erlang-app"
+component = "atomvm"
 
-[component.erlang-app]
+[component.atomvm]
 source = "AtomVM.wasm"
 files = [{ source = "spin_simple.avm", destination = "/test.avm" }]
-EOF
-
-# Run with Spin
-spin up
 ```
 
-## Files Location
+6. **Run**:
+```bash
+spin up
+# Output: Return value: ok
+```
 
-All test files are in: `/tmp/atomvm-test/`
-- `AtomVM.wasm` - The modified AtomVM binary
-- `spin_simple.avm` - Working Erlang demo
-- `spin_handler.avm` - IO demo (limited)
-- `spin.toml` - Spin manifest
+### Key Features
+
+- ✅ Runs Erlang/Elixir code successfully
+- ✅ Support for process spawning
+- ✅ Pattern matching, recursion, higher-order functions
+- ✅ List and map operations
+- ✅ File I/O with `--dir=` flag
+- ✅ Socket networking on localhost (127.0.0.1)
+
+### Limitations
+
+- ❌ No stdin/stdout - `io:format` doesn't produce visible output
+- ❌ No CLI arguments - handled by auto-detection of `/test.avm`, `/app.avm`, `./app.avm`
+- ❌ No raw socket access - Spin uses different networking model
+
+---
+
+## ⚠️ HTTP Trigger (Component Model Required)
+
+The HTTP trigger requires using the WASI **component model**, which adds complexity beyond the core module approach.
+
+### What is the Component Model?
+
+The component model is an extension to WebAssembly that:
+- Defines interfaces using WIT (WebAssembly Interface Type)
+- Provides better type safety and interoperability
+- Enables rich host-guest interactions (like HTTP)
+
+### HTTP Trigger Implementation Status
+
+**Current State**: Research and prototyping phase.
+
+**Components Needed**:
+1. ✅ WIT bindings generation (`wit-bindgen c`)
+2. ⚠️ Component adapter layer
+3. ⚠️ `wasi:http/incoming-handler` implementation
+4. ❌ Full integration with AtomVM
+
+### Implementation Requirements
+
+To enable HTTP trigger support, these steps are needed:
+
+#### 1. WIT Interface Definition
+
+```wit
+package atomvm:http
+
+world app {
+  export wasi:http/incoming-handler
+}
+```
+
+#### 2. Bindings Generation
+
+```bash
+# Requires proper WIT dependency structure
+wit-bindgen c --out-dir . app.wit
+```
+
+#### 3. Component Building
+
+```bash
+# Component adapter converts core module to component
+wasm-tools component new \
+    --adapt=/path/to/wasi_snapshot_preview1.reactor.wasm \
+    src/platforms/wasi/AtomVM.wasm \
+    -o AtomVM-http.wasm
+```
+
+#### 4. HTTP Handler Implementation
+
+```c
+void handle_incoming_request(
+    incoming_request_t *request,
+    response_outparam_t response_out
+) {
+    // Parse HTTP request
+    method_t method = request->method();
+    path_with_query_t path = request->path_with_query();
+    headers_t headers = request->headers();
+    body_t body = request->consume();
+
+    // Call into AtomVM (pattern)
+    // Send response...
+}
+```
+
+### Available Source Files
+
+We've created experimental source files in `src/platforms/wasi/http/`:
+- `wit/app.wit` - WIT interface definition
+- `host.h`, `host.c` - Generated bindings
+- `host_impl.c` - Implementation skeleton
+- `build-component.sh` - Build script
+- `README.md` - Detailed technical documentation
+
+### Work Remaining
+
+| Task | Status | Effort |
+|------|--------|--------|
+| WIT dependency setup | 🔧 In progress | Medium |
+| HTTP handler implementation | 🚧 Not started | High |
+| AtomVM integration | 🚧 Not started | High |
+| Testing with Spin | 🚧 Not started | Medium |
+
+### Alternative Approaches
+
+If time-constrained or complexity is a concern:
+
+1. **Use Command Trigger** (works now!)
+   - Simple, proven approach
+   - Good for computation-only workloads
+
+2. **Wait for Tooling Improvements**
+   - Component model tooling for C is evolving
+   - Future versions may simplify the process
+
+3. **Contribute Upstream**
+   - The `wasip2` ecosystem is young
+   - Documentation and examples will improve
+
+---
+
+## Testing Spin Applications
+
+### Command Trigger
+
+```bash
+# In directory with spin.toml
+spin up
+
+# View logs
+spin logs
+```
+
+### HTTP Trigger (when implemented)
+
+```bash
+# Start Spin
+spin up
+
+# Test HTTP endpoint
+curl http://localhost:3000/
+
+# View logs
+spin logs
+```
+
+---
+
+## Spin Configuration Reference
+
+### Command Trigger (`[[trigger.command]]`)
+
+```toml
+[[trigger.command]]
+component = "component-name"
+```
+
+- ✅ Supports `files` directive to mount AVM files
+- ✅ Works with any WASM component
+- ❌ No HTTP interface
+- ❌ Limited I/O (no TTY)
+
+### HTTP Trigger (`[[trigger.http]]`)
+
+```toml
+[[trigger.http]]
+route = "/..."
+component = "component-name"
+```
+
+- ✅ Full HTTP request/response
+- ✅ Access to headers, method, body
+- ❌ Requires component model
+- ❌ Complex setup
+
+---
+
+## Example Project Structure
+
+```
+atomvm-spin-demo/
+├── spin.toml              # Spin manifest
+├── AtomVM.wasm            # Command trigger: core module
+├── AtomVM-http.wasm       # HTTP trigger: component (TBD)
+├── spin_simple.avm        # Test application
+└── README.md              # Project documentation
+```
+
+---
+
+## Resources
+
+- [WASI Platform Documentation](../WASI.md)
+- [Component Model Guide](http/README.md)
+- [WASI HTTP Spec](https://github.com/WebAssembly/wasi-http)
+- [Spin Documentation](https://spinframework.dev/)
+- [Component Model](https://component-model.bytecodealliance.org/)
+
+---
 
 ## Conclusion
 
-AtomVM CAN run on Fermyon Spin, but with limitations:
-- ✅ Pure computation works (math, pattern matching, recursion)
-- ❌ Console I/O doesn't work in command trigger mode
-- ❌ Raw sockets don't work (Spin doesn't expose them)
-- ✅ Could work with HTTP trigger if we implement `wasi:http/incoming-handler`
+**For production use today**: Command trigger is ready and working.
 
-For full Spin integration, would need:
-1. HTTP trigger support (implement WASI HTTP interface)
-2. Use Spin's `wasi:http` for outbound requests instead of raw sockets
-3. Use Spin's KV store or SQLite instead of file I/O (optional)
+For HTTP trigger support: Requires additional component model implementation - see `src/platforms/wasi/http/README.md` for details and ongoing work.

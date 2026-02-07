@@ -33,3 +33,6 @@ src/platforms/esp32/dependencies.lock
 .cache
 .clang-tidy
 build-wasi/**
+.expert/
+# Ignore WASI HTTP dependencies
+src/platforms/wasi/http/wit/deps.bak/

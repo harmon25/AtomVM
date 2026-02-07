@@ -100,13 +100,22 @@ wasmtime --dir=. -S inherit-network -S tcp -S udp -S allow-ip-name-lookup AtomVM
 
 ### Fermyon Spin
 
-**Experimental** - Command trigger works, HTTP trigger requires additional work.
+**Status**: Command trigger works ✅, HTTP trigger requires component model ⚠️
 
-Spin doesn't expose raw sockets or TTY. Use command trigger for computation-only workloads.
+**Command Trigger** (Working):
+- ✅ Runs Erlang/Elixir code successfully
+- ✅ Pure computation (math, pattern matching, recursion)
+- ✅ Process spawning and message passing
+- ✅ File I/O support
+- ❌ No stdin/stdout - `io:format` doesn't produce visible output
+- ❌ No CLI arguments - auto-detection of `/test.avm`, `/app.avm`, `./app.avm`
 
-See [examples/spin/](examples/spin/) for working examples.
+**HTTP Trigger** (Requires Additional Work):
+- ⚠️ Requires WASI component model implementation
+- ⚠️ See `src/platforms/wasi/http/` for experimental work
+- See [docs/SPIN_DEMO.md](docs/SPIN_DEMO.md) for full status
 
-#### Quick Spin Demo
+#### Quick Spin Demo (Command Trigger)
 
 ```bash
 # Install Spin
