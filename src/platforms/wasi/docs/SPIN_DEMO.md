@@ -177,7 +177,7 @@ atomvm-spin-demo/
 ## Resources
 
 - [HTTP Implementation Details](../http/README.md)
-- [WASI Platform Documentation](../WASI.md)
+- [WASI Platform Documentation](../README.md)
 - [WASI HTTP Spec](https://github.com/WebAssembly/wasi-http)
 - [Spin Documentation](https://spinframework.dev/)
 - [Component Model](https://component-model.bytecodealliance.org/)

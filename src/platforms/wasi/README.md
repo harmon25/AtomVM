@@ -300,12 +300,96 @@ start() ->
     socket:close(Socket).
 ```
 
+## Fermyon Spin
+
+### Command Trigger
+
+The command trigger works for computation-only workloads:
+
+```bash
+# Install Spin
+curl -fsSL https://spinframework.dev/downloads/install.sh | bash
+
+# Install command trigger plugin
+spin plugins install trigger-command
+
+# Create spin.toml
+cat > spin.toml << 'EOF'
+spin_manifest_version = 2
+
+[application]
+name = "erlang-app"
+version = "0.1.0"
+
+[[trigger.command]]
+component = "erlang-app"
+
+[component.erlang-app]
+source = "AtomVM.wasm"
+files = [{ source = "myapp.avm", destination = "/test.avm" }]
+EOF
+
+# Run
+spin up
+```
+
+**Note**: Spin's command trigger doesn't pass CLI arguments. AtomVM
+automatically looks for AVM files at `/test.avm`, `/app.avm`, or `./app.avm`
+when no arguments are provided.
+
+### HTTP Trigger
+
+AtomVM implements the `wasi:http/incoming-handler` interface, enabling Erlang
+HTTP handlers to run as Spin HTTP components. See [docs/SPIN_DEMO.md](docs/SPIN_DEMO.md)
+for full details, and [http/README.md](http/README.md) for the implementation.
+
+## Elixir on WASI
+
+Elixir code can run on WASI using Erlang stdlib functions (`:lists`, `:maps`,
+etc.) since the full Elixir stdlib isn't bundled. See the Elixir examples in
+`examples/elixir/wasi/` at the repository root.
+
+## Troubleshooting
+
+### "Failed load module: init.beam"
+
+This is a benign warning. AtomVM tries to load an optional `init.beam` module.
+Your app should still run.
+
+### "no .avm or .beam files specified"
+
+When running on Spin, ensure:
+1. AVM file is embedded in `spin.toml` via `files` directive
+2. File is at one of the default paths: `/test.avm`, `/app.avm`, `./app.avm`
+
+### Socket connections hang
+
+External TCP connections may hang on wasmtime. This is an upstream issue with
+wasi-libc's socket implementation. Localhost connections (127.0.0.1) work fine.
+
+### Console output not showing
+
+On Spin's command trigger, `io:format` and `erlang:display` may not produce
+visible output. The return value (`Return value: ok/error`) indicates
+success/failure.
+
 ## File layout
 
 ```
 src/platforms/wasi/
 ├── cmake/
 │   └── wasi-sdk.cmake              # CMake toolchain file for wasi-sdk (wasm32-wasip2)
+├── docs/
+│   └── SPIN_DEMO.md                # Fermyon Spin status and guide
+├── http/                           # HTTP component for Spin (wasi:http)
+│   ├── main_http.c                 # Reactor-mode entry point
+│   ├── wasi_http_handler.c/h       # Incoming HTTP request handler
+│   ├── wasi_http_outbound.c/h      # Outbound HTTP client
+│   ├── wasi_http_nifs.c            # HTTP NIFs (spin_http module)
+│   ├── wasi_spin_nifs.c            # Spin NIFs (spin_config, spin_kv, etc.)
+│   ├── spin_*.erl                  # Erlang NIF stub modules
+│   ├── generated/                  # wit-bindgen generated bindings
+│   └── wit/                        # WIT interface definitions
 ├── lib/
 │   ├── CMakeLists.txt              # Platform library build
 │   ├── otp_socket_platform.c       # Socket platform support (supports_peek)
@@ -317,9 +401,15 @@ src/platforms/wasi/
 │   ├── sys.c                       # WASI sys.h implementation with poll()-based events
 │   ├── wasi_compat.h               # Shims for fcntl, connect, tzset, etc.
 │   └── wasi_sys.h                  # Platform data structures with pollfd array
+├── test/                           # WASI platform tests
+│   └── test_*.erl                  # Erlang test programs for VM features
 ├── CMakeLists.txt                  # Top-level standalone build
 ├── main.c                          # Entry point
 └── README.md                       # This file
+
+examples/
+├── erlang/wasi/                    # Erlang WASI examples (hello, spin)
+└── elixir/wasi/                    # Elixir WASI examples (demos, spin)
 ```
 
 ## Design notes
@@ -346,3 +436,22 @@ src/platforms/wasi/
   the `wasi:sockets` interface. We implement `sys_poll_events()` using `poll()`
   to wait for socket I/O events, and provide shims for `fcntl()` and `connect()`
   to handle WASI's always-non-blocking sockets.
+
+## Contributing
+
+To extend WASI platform support:
+
+1. **Better socket error handling**: Map WASI-specific errors properly
+2. **Elixir stdlib**: Bundle Elixir standard library for full Elixir support
+3. **Component model**: Export AtomVM as a component with custom interfaces
+
+## References
+
+- [WASI Specification](https://github.com/WebAssembly/WASI)
+- [Wasmtime Documentation](https://docs.wasmtime.dev/)
+- [Spin Documentation](https://spinframework.dev/)
+- [AtomVM Documentation](https://www.atomvm.net/)
+
+## License
+
+Apache-2.0 OR LGPL-2.1-or-later (same as AtomVM)

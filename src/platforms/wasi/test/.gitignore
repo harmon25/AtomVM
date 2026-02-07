@@ -1,0 +1,3 @@
+# Build artifacts from compiling test programs
+*.avm
+*.beam
