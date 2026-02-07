@@ -1,21 +1,103 @@
+%% @doc Spin HTTP handler for AtomVM.
+%%
+%% This module implements the handler callback for the wasi:http/incoming-handler
+%% integration. When Spin (or wasmtime serve) receives an HTTP request, AtomVM
+%% calls `handle/1` with a request map and expects a response map back.
+%%
+%% == Request Map ==
+%% The request map has the following keys:
+%% <ul>
+%%   <li>`method' - atom: get, post, put, delete, head, options, patch, trace, connect</li>
+%%   <li>`path' - binary: the request path with query string, e.g. &lt;&lt;"/hello?name=world"&gt;&gt;</li>
+%%   <li>`headers' - list of {Name :: binary(), Value :: binary()} tuples</li>
+%%   <li>`body' - binary: the request body (empty binary if no body)</li>
+%%   <li>`authority' - binary: the host header value (optional)</li>
+%% </ul>
+%%
+%% == Response Map ==
+%% The response map should have:
+%% <ul>
+%%   <li>`status' - integer: HTTP status code (e.g. 200)</li>
+%%   <li>`headers' - list of {Name :: binary(), Value :: binary()} tuples</li>
+%%   <li>`body' - binary: the response body</li>
+%% </ul>
+%%
+%% Alternatively, returning a plain binary is treated as a 200 OK response
+%% with content-type text/plain.
+
 -module(spin_handler).
--export([start/0]).
+-export([handle/1]).
 
-start() ->
-    io:format("🚀 Erlang running on Fermyon Spin!~n~n"),
-    io:format("This is an Erlang HTTP handler running as a Spin component.~n"),
-    io:format("Features demonstrated:~n"),
-    io:format("  ✓ Process spawning: ~p~n", [self()]),
-    io:format("  ✓ List operations: ~p~n", [[1,2,3] ++ [4,5,6]]),
-    io:format("  ✓ Pattern matching: ~p~n", [ classify(42) ]),
-    io:format("  ✓ Recursion: fib(10) = ~p~n", [ fib(10) ]),
-    io:format("~nHello from Erlang on Spin! 🎉~n"),
-    ok.
+%% @doc Handle an incoming HTTP request.
+%% @param Request A map containing the HTTP request data.
+%% @returns A map containing the HTTP response data.
+handle(#{method := Method, path := Path, headers := Headers, body := Body} = _Request) ->
+    %% Route based on path
+    case Path of
+        <<"/">> ->
+            respond_ok(<<"Hello from AtomVM on Spin!">>);
+        <<"/hello">> ->
+            respond_ok(<<"Hello, World!">>);
+        <<"/echo">> ->
+            %% Echo back the request body
+            #{
+                status => 200,
+                headers => [{<<"content-type">>, <<"application/octet-stream">>}],
+                body => Body
+            };
+        <<"/info">> ->
+            %% Return request info as text
+            Info = format_request_info(Method, Path, Headers, Body),
+            #{
+                status => 200,
+                headers => [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
+                body => Info
+            };
+        <<"/json">> ->
+            %% Simple JSON response
+            #{
+                status => 200,
+                headers => [{<<"content-type">>, <<"application/json">>}],
+                body => <<"{\"message\":\"Hello from AtomVM\",\"platform\":\"wasi\"}">>
+            };
+        _ ->
+            %% 404 for unknown paths
+            #{
+                status => 404,
+                headers => [{<<"content-type">>, <<"text/plain">>}],
+                body => <<"Not Found">>
+            }
+    end.
 
-classify(N) when N > 0 -> positive;
-classify(N) when N < 0 -> negative;
-classify(0) -> zero.
+%% @doc Create a simple 200 OK text response.
+respond_ok(Body) ->
+    #{
+        status => 200,
+        headers => [{<<"content-type">>, <<"text/plain; charset=utf-8">>}],
+        body => Body
+    }.
 
-fib(0) -> 0;
-fib(1) -> 1;
-fib(N) -> fib(N-1) + fib(N-2).
+%% @doc Format request information as a readable string.
+format_request_info(Method, Path, Headers, Body) ->
+    MethodBin = atom_to_binary(Method, utf8),
+    HeaderLines = format_headers(Headers),
+    BodyInfo = case byte_size(Body) of
+        0 -> <<"(empty)">>;
+        N ->
+            SizeBin = integer_to_binary(N),
+            <<SizeBin/binary, " bytes">>
+    end,
+    <<"Method: ", MethodBin/binary, "\n",
+      "Path: ", Path/binary, "\n",
+      "Headers:\n", HeaderLines/binary,
+      "Body: ", BodyInfo/binary, "\n">>.
+
+%% @doc Format headers as indented lines.
+format_headers(Headers) ->
+    format_headers(Headers, <<>>).
+
+format_headers([], Acc) ->
+    Acc;
+format_headers([{Name, Value} | Rest], Acc) ->
+    Line = <<"  ", Name/binary, ": ", Value/binary, "\n">>,
+    format_headers(Rest, <<Acc/binary, Line/binary>>).

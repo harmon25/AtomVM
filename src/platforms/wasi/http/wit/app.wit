@@ -1,4 +1,15 @@
-package test:host;
-world host {
-  export run: func();
+package atomvm:http;
+
+world app {
+  // Import all the standard WASI interfaces that the proxy world needs
+  import wasi:clocks/monotonic-clock@0.2.8;
+  import wasi:clocks/wall-clock@0.2.8;
+  import wasi:random/random@0.2.8;
+  import wasi:cli/stdout@0.2.8;
+  import wasi:cli/stderr@0.2.8;
+  import wasi:cli/stdin@0.2.8;
+  import wasi:http/types@0.2.8;
+
+  // Export the incoming-handler interface for Spin HTTP triggers
+  export wasi:http/incoming-handler@0.2.8;
 }

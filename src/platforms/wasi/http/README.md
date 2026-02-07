@@ -1,182 +1,97 @@
 # Spin HTTP Trigger Support for AtomVM
 
-## Status: Work in Progress
+## Status: Implemented
 
-This document outlines the approach for implementing Spin HTTP trigger support using the WASI component model.
+AtomVM supports the `wasi:http/incoming-handler` interface, enabling Erlang/Elixir
+HTTP handlers to run as Spin components or via `wasmtime serve`.
 
-## Current Status
-
-✅ **Completed**:
-- Component model bindings generated via `wit-bindgen c`
-- Simple component skeleton created
-- Toolchain installed: `wasm-tools`, `wit-bindgen-cli`
-
-⚠️ **Work in Progress**:
-- Full `wasi:http/incoming-handler` implementation
-- Component adapter integration
-- Spin-compatible HTTP response generation
-
-## Component Model Overview
-
-The WASI component model allows us to:
-
-1. Define interfaces in WIT (WebAssembly Interface Type) language
-2. Generate language-specific bindings (C for AtomVM)
-3. Create components that can be hosted by Spin
-
-### Simple Component Structure
+## Architecture
 
 ```
-src/platforms/wasi/http/
-├── wit/
-│   └── app.wit              # WIT interface definition
-├── host.h                   # Generated header
-├── host.c                   # Generated adapter code
-├── host_impl.c              # Our implementation
-└── build-component.sh         # Build script
+HTTP Request (Spin / wasmtime serve)
+        │
+        ▼
+┌─────────────────────────────┐
+│  wasi:http/incoming-handler │  (WASI component model export)
+│  exports_wasi_http_         │
+│  incoming_handler_handle()  │
+└─────────────┬───────────────┘
+              │
+              ▼
+┌─────────────────────────────┐
+│  wasi_http_handler.c        │  Extracts request → Erlang map
+│                             │  Calls spin_handler:handle/1
+│                             │  Converts response map → WASI
+└─────────────┬───────────────┘
+              │
+              ▼
+┌─────────────────────────────┐
+│  AtomVM BEAM Interpreter    │  Runs your Erlang/Elixir code
+│  spin_handler:handle/1      │
+└─────────────────────────────┘
 ```
 
-## Full HTTP Handler Implementation
+The component runs in **reactor mode**: AtomVM initializes once during module
+instantiation (loading the `.avm` file), then the host calls `handle()` for
+each incoming HTTP request.
 
-To implement full `wasi:http/incoming-handler` support, we need:
+## Quick Start
 
-### 1. WIT Dependencies Structure
-
-```wit
-wit/
-├── app.wit                 # Our component definition
-└── deps/
-    └── wasi/
-        └── http.wasm        # WIT dependencies (or .wit files)
-```
-
-The WIT file would be:
-
-```wit
-package atomvm:http
-
-world app {
-  export wasi:http/incoming-handler
-}
-```
-
-This exports the standard `wasi:http` interface.
-
-### 2. HTTP Handler Interface
-
-The `wasi:http/incoming-handler` interface requires:
-
-```c
-// Generated signature (simplified)
-void handle_incoming_request(
-    incoming_request_t *request,
-    response_outparam_t response
-);
-```
-
-Where:
-- `incoming_request`: Contains method, path, headers, body
-- `response_outparam`: Used to send the response
-
-### 3. Implementation Pattern
-
-```c
-void handle_incoming_request(
-    incoming_request_t *request,
-    response_outparam_t response_out
-) {
-    // 1. Extract request data
-    method_t method = request->method();
-    path_with_query_t path = request->path_with_query();
-    headers_t headers = request->headers();
-    body_t body;
-    body = request->consume();
-
-    // 2. Create response
-    headers_t response_headers = make_headers();
-    set_header(response_headers, "content-type", "text/plain");
-    outgoing_response_t response = make_response(200, response_headers);
-    outgoing_body_t resp_body = response.body();
-
-    // 3. Write response body (from AtomVM)
-    const char *atomvm_response = "Hello from AtomVM!";
-    stream_write(resp_body, atomvm_response, strlen(atomvm_response));
-    finish_body(resp_body, NULL);
-
-    // 4. Send response
-    response_outparam_set(response_out, response);
-}
-```
-
-## Challenges & Solutions
-
-### Challenge 1: WIT Dependency Resolution
-
-**Issue**: `wit-bindgen c` needs all WASI dependencies properly structured.
-
-**Solution Options**:
-1. Copy WIT packages from `wasi-http` and `wasi-cli` repos
-2. Use pre-compiled `.wasm` files for dependencies
-3. Package as `wit` component and resolve dynamically
-
-**Current Approach**: Use `wit/deps/wasi-http/wit/` directory structure.
-
-### Challenge 2: Component Adapter Layer
-
-**Issue**: AtomVM.wasm is a core module; Spin expects component model.
-
-**Solution**: Use `wasm-tools component new` with adapters:
+### 1. Build the HTTP component
 
 ```bash
-# Create component from core module
-wasm-tools component new \
-    --adapt=/path/to/wasi_snapshot_preview1.reactor.wasm \
-    build-wasi/AtomVM.wasm \
-    -o AtomVM-http.wasm
+# Ensure wasi-sdk is installed
+export WASI_SDK_PATH=/path/to/wasi-sdk-30
+
+# Build using the script
+cd src/platforms/wasi/http
+./build-component.sh
+
+# Or manually with CMake
+cmake -S src/platforms/wasi -B build-wasi \
+    -DCMAKE_TOOLCHAIN_FILE=src/platforms/wasi/cmake/wasi-sdk.cmake \
+    -DAVM_BUILD_HTTP_COMPONENT=ON
+cmake --build build-wasi --target AtomVM_http
 ```
 
-The `wasi_snapshot_preview1.reactor.wasm` adapter converts between core module and component model.
+Output: `build-wasi/AtomVM_http.wasm`
 
-### Challenge 3: Resource Management
+### 2. Write an Erlang handler
 
-**Issue**: HTTP requests/responses are resources that need proper lifetime management.
+Create `spin_handler.erl`:
 
-**Solution**: Follow WASI resource patterns:
-- Resources have refcounts
-- Use `_borrow` for temporary access
-- Use `_drop` to release references
-- Generated bindings will handle this
+```erlang
+-module(spin_handler).
+-export([handle/1]).
 
-## Recommended Implementation Path
+handle(#{method := Method, path := Path, body := Body}) ->
+    case Path of
+        <<"/">> ->
+            #{status => 200,
+              headers => [{<<"content-type">>, <<"text/plain">>}],
+              body => <<"Hello from AtomVM!">>};
+        <<"/echo">> ->
+            #{status => 200,
+              headers => [{<<"content-type">>, <<"application/octet-stream">>}],
+              body => Body};
+        _ ->
+            #{status => 404,
+              headers => [{<<"content-type">>, <<"text/plain">>}],
+              body => <<"Not Found">>}
+    end.
+```
 
-### Phase 1: Simple Component (Current) ✅
+### 3. Compile to .avm
 
-- Create minimal component that exports a simple interface
-- Get component building with `wasm-tools component new`
-- Test with `wasmtime serve`
+```bash
+# Using erlc + packbeam (from AtomVM tools)
+erlc spin_handler.erl
+packbeam create app.avm spin_handler.beam
+```
 
-### Phase 2: Component Adapter Integration (Next)
+### 4. Run with Spin
 
-- Obtain the HTTP adapter (wasi_snapshot_preview1 adapter)
-- Create component from AtomVM.wasm
-- Handle `canonical_abi_realloc` for string management
-
-### Phase 3: Full HTTP Interface Implementation
-
-- Set up proper WIT dependencies
-- Generate HTTP bindings with `wit-bindgen c`
-- Implement `handle_incoming_request`
-- Integrate with AtomVM request/response handling
-
-### Phase 4: Spin Integration
-
-- Configure `spin.toml` for HTTP component
-- Test HTTP requests
-- Handle common HTTP patterns (routing, headers, streaming)
-
-## Spin Configuration Example
-
-For a component-based HTTP handler, `spin.toml` would be:
+Create `spin.toml`:
 
 ```toml
 spin_manifest_version = 2
@@ -190,58 +105,139 @@ route = "/..."
 component = "atomvm"
 
 [component.atomvm]
-source = "AtomVM-http.wasm"
+source = "AtomVM_http.wasm"
+files = [{ source = "app.avm", destination = "/app.avm" }]
 ```
-
-## Testing
-
-### With Wasmtime (component model aware runtime):
-
-```bash
-wasmtime serve -S http AtomVM-http.wasm
-```
-
-### With Spin:
 
 ```bash
 spin up
 curl http://localhost:3000/
+# => Hello from AtomVM!
 ```
 
-## Alternative: Simplified Approach
+### 5. Run with wasmtime serve
 
-Given the complexity of full `wasi:http` implementation, consider:
+```bash
+wasmtime serve --dir=. build-wasi/AtomVM_http.wasm
+curl http://localhost:8080/
+```
 
-1. **Use Spin Command Trigger first** (already working)
-   - Good for computation-only workloads
-   - No HTTP interface needed
+## Handler API
 
-2. **Document the full HTTP requirements**
-   - This approach is complex but feasible
-   - Requires WIT deps, adapters, and resource management
+### Request Map
 
-3. **Contribute upstream**
-   - The component model for C is still evolving
-   - Tooling may improve over time
+The handler receives a map with these keys:
 
-## References
+| Key         | Type                                | Description                          |
+|-------------|-------------------------------------|--------------------------------------|
+| `method`    | `atom()`                            | `get`, `post`, `put`, `delete`, etc. |
+| `path`      | `binary()`                          | Path with query, e.g. `<<"/foo?x=1">>` |
+| `headers`   | `[{binary(), binary()}]`            | List of `{Name, Value}` tuples       |
+| `body`      | `binary()`                          | Request body (empty binary if none)  |
+| `authority` | `binary()` (optional)               | Host header / authority              |
 
-- [WASI HTTP Spec](https://github.com/WebAssembly/wasi-http)
-- [Component Model](https://component-model.bytecodealliance.org/)
-- [wit-bindgen CLI](https://github.com/bytecodealliance/wit-bindgen)
-- [wasm-tools](https://github.com/bytecodealliance/wasm-tools)
-- [Spin HTTP Trigger Docs](https://spinframework.dev/v2/http-trigger)
-- [Sample C Component](https://docs.wasmtime.dev/api/wasmtime/component/macro.bindgen.html)
+### Response Format
 
-## Next Steps
+Return a map with these keys:
 
-To proceed with full HTTP implementation:
+| Key       | Type                     | Description                          |
+|-----------|--------------------------|--------------------------------------|
+| `status`  | `integer()`              | HTTP status code (e.g., 200)         |
+| `headers` | `[{binary(), binary()}]` | Response headers                     |
+| `body`    | `binary()`               | Response body                        |
 
-1. ⬜ Set up WIT dependencies in `wit/deps/wasi-http/`
-2. ⬜ Generate HTTP bindings with `wit-bindgen c`
-3. ⬜ Implement `handle_incoming_request` function
-4. ⬜ Use component adapters to create AtomVM-http.wasm
-5. ⬜ Test with wasmtime and Spin
-6. ⬜ Document integration with AtomVM's request/response handling
+Alternatively, return a plain `binary()` for a simple 200 OK text/plain response.
 
-Or, document current limitations and proceed with command trigger for production use cases.
+## File Structure
+
+```
+http/
+├── wit/
+│   ├── app.wit                    # WIT world definition (exports incoming-handler)
+│   └── deps/                      # WASI interface dependencies
+│       ├── cli/                   # wasi:cli@0.2.8
+│       ├── clocks/                # wasi:clocks@0.2.8
+│       ├── filesystem/            # wasi:filesystem@0.2.8
+│       ├── http/                  # wasi:http@0.2.8 (handler.wit, types.wit, proxy.wit)
+│       ├── io/                    # wasi:io@0.2.8 (streams, poll, error)
+│       ├── random/                # wasi:random@0.2.8
+│       └── sockets/               # wasi:sockets@0.2.8
+├── generated/
+│   ├── app.h                      # Generated C bindings (wit-bindgen 0.52.0)
+│   ├── app.c                      # Generated adapter/glue code
+│   └── app_component_type.o       # Component type metadata object
+├── wasi_http_handler.h            # Handler API header
+├── wasi_http_handler.c            # incoming-handler implementation
+├── main_http.c                    # Reactor-mode initialization
+├── build-component.sh             # Build script
+└── README.md                      # This file
+```
+
+## Regenerating Bindings
+
+If you modify `wit/app.wit` or update WIT dependencies:
+
+```bash
+# Requires: cargo install wit-bindgen-cli
+./build-component.sh --regenerate-bindings
+```
+
+Or manually:
+
+```bash
+wit-bindgen c wit/ --out-dir generated/
+```
+
+## How It Works
+
+1. **Initialization** (`main_http.c`): A constructor function runs during WASI
+   module instantiation. It creates the AtomVM `GlobalContext`, loads `app.avm`
+   from the WASI filesystem, and stores the context globally.
+
+2. **Request handling** (`wasi_http_handler.c`): When the host calls
+   `wasi:http/incoming-handler.handle`, we:
+   - Extract method, path, headers, and body from WASI resources
+   - Build an Erlang map on a fresh Context's heap
+   - Call `spin_handler:handle/1` via `context_execute_loop`
+   - Parse the returned Erlang response map
+   - Send the response back through WASI's `response-outparam`
+
+3. **Component model**: The `wasm32-wasip2` target directly produces a valid
+   WASI component. No separate `wasm-tools component new` step is needed.
+
+## Elixir Support
+
+The handler also supports Elixir modules. Define `SpinHandler.handle/1`:
+
+```elixir
+defmodule SpinHandler do
+  def handle(%{method: method, path: path, body: body}) do
+    case path do
+      "/" -> %{status: 200, headers: [{"content-type", "text/plain"}], body: "Hello from Elixir!"}
+      _ -> %{status: 404, headers: [{"content-type", "text/plain"}], body: "Not Found"}
+    end
+  end
+end
+```
+
+Compile and package:
+
+```bash
+elixirc --no-docs --no-debug-info spin_handler.ex
+packbeam create app.avm Elixir.SpinHandler.beam estdlib.avm eavmlib.avm
+```
+
+The runtime tries both `spin_handler` (Erlang) and `Elixir.SpinHandler` (Elixir)
+module names automatically.
+
+See `examples/spin/spin_handler.ex` for a full Elixir example.
+
+## Limitations
+
+- **Synchronous**: Each request blocks the single-threaded WASM instance.
+  This is fine for Spin (which creates instances per-request) and for
+  sequential request handling in wasmtime.
+- **No streaming**: The entire request body is buffered in memory before
+  being passed to the handler. Response bodies are also fully buffered.
+- **Module name**: The handler module must be named `spin_handler` (Erlang)
+  or `SpinHandler` (Elixir) and export `handle/1`.
