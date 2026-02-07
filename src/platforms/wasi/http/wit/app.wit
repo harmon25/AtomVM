@@ -19,6 +19,9 @@ world app {
   import fermyon:spin/rdbms-types@2.0.0;
   import fermyon:spin/postgres@2.0.0;
 
+  // Import WASI config store (variables/secrets)
+  import wasi:config/store@0.2.0-draft-2024-09-27;
+
   // Export the incoming-handler interface for Spin HTTP triggers
   export wasi:http/incoming-handler@0.2.8;
 }

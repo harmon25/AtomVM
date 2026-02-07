@@ -782,6 +782,105 @@ static term nif_spin_postgres_close(Context *ctx, int argc, term argv[])
 }
 
 // ===========================================================================
+// Config Store NIFs (wasi:config/store)
+// ===========================================================================
+
+static term nif_spin_config_get(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    GlobalContext *glb = ctx->global;
+
+    if (!term_is_binary(argv[0])) { RAISE_ERROR(BADARG_ATOM); }
+
+    app_string_t key;
+    app_string_dup_n(&key, term_binary_data(argv[0]), term_binary_size(argv[0]));
+
+    app_option_string_t val;
+    wasi_config_store_error_t err;
+    bool ok = wasi_config_store_get(&key, &val, &err);
+    app_string_free(&key);
+
+    if (!ok) {
+        wasi_config_store_error_free(&err);
+        if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(2)) != MEMORY_GC_OK)) { RAISE_ERROR(OUT_OF_MEMORY_ATOM); }
+        term t = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(t, 0, ERROR_ATOM);
+        term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\xC", "config_error")));
+        return t;
+    }
+
+    if (!val.is_some) {
+        if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(2)) != MEMORY_GC_OK)) { RAISE_ERROR(OUT_OF_MEMORY_ATOM); }
+        term t = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(t, 0, OK_ATOM);
+        term_put_tuple_element(t, 1, UNDEFINED_ATOM);
+        return t;
+    }
+
+    size_t heap_needed = TUPLE_SIZE(2) + term_binary_heap_size(val.val.len);
+    if (UNLIKELY(memory_ensure_free(ctx, heap_needed) != MEMORY_GC_OK)) {
+        app_string_free(&val.val);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    term bin = term_from_literal_binary(val.val.ptr, val.val.len, &ctx->heap, glb);
+    app_string_free(&val.val);
+
+    term t = term_alloc_tuple(2, &ctx->heap);
+    term_put_tuple_element(t, 0, OK_ATOM);
+    term_put_tuple_element(t, 1, bin);
+    return t;
+}
+
+static term nif_spin_config_get_all(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    UNUSED(argv);
+    GlobalContext *glb = ctx->global;
+
+    app_list_tuple2_string_string_t entries;
+    wasi_config_store_error_t err;
+    bool ok = wasi_config_store_get_all(&entries, &err);
+
+    if (!ok) {
+        wasi_config_store_error_free(&err);
+        if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(2)) != MEMORY_GC_OK)) { RAISE_ERROR(OUT_OF_MEMORY_ATOM); }
+        term t = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(t, 0, ERROR_ATOM);
+        term_put_tuple_element(t, 1, globalcontext_make_atom(glb, ATOM_STR("\xC", "config_error")));
+        return t;
+    }
+
+    // Calculate heap: list of {Key, Value} tuples
+    size_t heap_needed = TUPLE_SIZE(2);
+    for (size_t i = 0; i < entries.len; i++) {
+        heap_needed += TUPLE_SIZE(2) + CONS_SIZE
+            + term_binary_heap_size(entries.ptr[i].f0.len)
+            + term_binary_heap_size(entries.ptr[i].f1.len);
+    }
+    if (UNLIKELY(memory_ensure_free(ctx, heap_needed) != MEMORY_GC_OK)) {
+        app_list_tuple2_string_string_free(&entries);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    term list = term_nil();
+    for (int i = (int) entries.len - 1; i >= 0; i--) {
+        term k = term_from_literal_binary(entries.ptr[i].f0.ptr, entries.ptr[i].f0.len, &ctx->heap, glb);
+        term v = term_from_literal_binary(entries.ptr[i].f1.ptr, entries.ptr[i].f1.len, &ctx->heap, glb);
+        term tuple = term_alloc_tuple(2, &ctx->heap);
+        term_put_tuple_element(tuple, 0, k);
+        term_put_tuple_element(tuple, 1, v);
+        list = term_list_prepend(tuple, list, &ctx->heap);
+    }
+    app_list_tuple2_string_string_free(&entries);
+
+    term t = term_alloc_tuple(2, &ctx->heap);
+    term_put_tuple_element(t, 0, OK_ATOM);
+    term_put_tuple_element(t, 1, list);
+    return t;
+}
+
+// ===========================================================================
 // NIF Registration
 // ===========================================================================
 
@@ -802,6 +901,8 @@ MAKE_NIF(nif_pg_open, nif_spin_postgres_open)
 MAKE_NIF(nif_pg_query, nif_spin_postgres_query)
 MAKE_NIF(nif_pg_execute, nif_spin_postgres_execute)
 MAKE_NIF(nif_pg_close, nif_spin_postgres_close)
+MAKE_NIF(nif_config_get, nif_spin_config_get)
+MAKE_NIF(nif_config_get_all, nif_spin_config_get_all)
 
 const struct Nif *wasi_spin_nifs_get_nif(const char *nifname)
 {
@@ -825,6 +926,9 @@ const struct Nif *wasi_spin_nifs_get_nif(const char *nifname)
     if (strcmp(nifname, "spin_postgres:execute/2") == 0) return &nif_pg_execute;
     if (strcmp(nifname, "spin_postgres:execute/3") == 0) return &nif_pg_execute;
     if (strcmp(nifname, "spin_postgres:close/1") == 0) return &nif_pg_close;
+    // Config
+    if (strcmp(nifname, "spin_config:get/1") == 0) return &nif_config_get;
+    if (strcmp(nifname, "spin_config:get_all/0") == 0) return &nif_config_get_all;
 
     return NULL;
 }

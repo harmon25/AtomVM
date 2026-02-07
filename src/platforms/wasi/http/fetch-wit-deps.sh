@@ -51,5 +51,11 @@ if [ -d "${DEPS_BAK}/spin" ]; then
     cp "${DEPS_BAK}/spin/"*.wit "${DEPS_OUT}/spin/"
 fi
 
+# Copy wasi:config interface
+if [ -d "${DEPS_BAK}/config" ]; then
+    mkdir -p "${DEPS_OUT}/config"
+    cp "${DEPS_BAK}/config/"*.wit "${DEPS_OUT}/config/"
+fi
+
 echo "WIT dependencies populated in ${DEPS_OUT}/"
 ls -1d "${DEPS_OUT}"/*/
