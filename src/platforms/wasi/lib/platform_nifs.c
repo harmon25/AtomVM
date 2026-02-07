@@ -25,6 +25,9 @@
 #include "platform_defaultatoms.h"
 #include "term.h"
 
+#include "otp_net.h"
+#include "otp_socket.h"
+
 #include <string.h>
 
 // #define ENABLE_TRACE
@@ -50,5 +53,12 @@ const struct Nif *platform_nifs_get_nif(const char *nifname)
         TRACE("Resolved platform nif %s ...\n", nifname);
         return &atomvm_platform_nif;
     }
-    return NULL;
+
+    const struct Nif *nif = otp_net_nif_get_nif(nifname);
+    if (nif) {
+        return nif;
+    }
+    nif = otp_socket_nif_get_nif(nifname);
+
+    return nif;
 }

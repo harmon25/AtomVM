@@ -53,8 +53,8 @@ set(HAVE_MKFIFO "" CACHE INTERNAL "Have symbol mkfifo" FORCE)
 set(HAVE_UNLINK "" CACHE INTERNAL "Have symbol unlink" FORCE)
 set(HAVE_EXECVE "" CACHE INTERNAL "Have symbol execve" FORCE)
 set(HAVE_CLOSEFROM "" CACHE INTERNAL "Have symbol closefrom" FORCE)
-set(HAVE_SOCKET "" CACHE INTERNAL "Have symbol socket" FORCE)
-set(HAVE_SELECT "" CACHE INTERNAL "Have symbol select" FORCE)
+# WASI p2 provides sockets and select via wasi:sockets
+# HAVE_SOCKET and HAVE_SELECT are auto-detected by libAtomVM
 
 set(
     PLATFORM_LIB_SUFFIX

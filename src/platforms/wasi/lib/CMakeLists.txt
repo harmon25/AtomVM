@@ -23,14 +23,21 @@ project(libAtomVMPlatformWASI)
 
 set(HEADER_FILES
     wasi_sys.h
+    otp_socket_platform.h
     platform_defaultatoms.def
     platform_defaultatoms.h
+    ../../../libAtomVM/otp_net.h
+    ../../../libAtomVM/otp_socket.h
 )
 
 set(SOURCE_FILES
     platform_defaultatoms.c
     platform_nifs.c
+    otp_socket_platform.c
     sys.c
+    ../../../libAtomVM/inet.c
+    ../../../libAtomVM/otp_net.c
+    ../../../libAtomVM/otp_socket.c
 )
 
 set(
@@ -44,6 +51,14 @@ target_compile_options(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC
     -Wall -Wextra
     # wasi-libc implements lseek() as a macro using GNU statement expressions
     -Wno-gnu-statement-expression-from-macro-expansion
+    # Force-include WASI compatibility shims for otp_socket.c, etc.
+    -include "${CMAKE_CURRENT_SOURCE_DIR}/wasi_compat.h"
 )
 
 target_link_libraries(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC libAtomVM)
+target_include_directories(libAtomVM${PLATFORM_LIB_SUFFIX} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+include(DefineIfExists)
+define_if_function_exists(libAtomVM${PLATFORM_LIB_SUFFIX} signal "signal.h" PRIVATE HAVE_SIGNAL)
+define_if_function_exists(libAtomVM${PLATFORM_LIB_SUFFIX} getservbyname "netdb.h" PRIVATE HAVE_SERVBYNAME)
+define_if_function_exists(libAtomVM${PLATFORM_LIB_SUFFIX} gethostname "unistd.h" PRIVATE HAVE_GETHOSTNAME)

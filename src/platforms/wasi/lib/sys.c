@@ -24,6 +24,8 @@
 #include "avmpack.h"
 #include "defaultatoms.h"
 #include "iff.h"
+#include "otp_net.h"
+#include "otp_socket.h"
 #include "scheduler.h"
 #include "utils.h"
 
@@ -33,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/poll.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -57,6 +60,7 @@ static bool event_listener_is_event(EventListener *listener, listener_event_t ev
 
 #include "listeners.h"
 
+#include "resources.h"
 #include "trace.h"
 
 // ---------------------------------------------------------------------------
@@ -130,20 +134,72 @@ static const struct AVMPackInfo malloc_avm_pack_info = {
 
 void sys_poll_events(GlobalContext *glb, int timeout_ms)
 {
-    UNUSED(glb);
+    struct WASIPlatformData *platform = glb->platform_data;
 
-    // On WASI there is no fd-based I/O multiplexing. If a timeout is
-    // requested we sleep using nanosleep(), which WASI maps to poll_oneoff
-    // with a single clock subscription.
-    if (timeout_ms > 0) {
-        struct timespec ts;
-        ts.tv_sec = timeout_ms / 1000;
-        ts.tv_nsec = (long) (timeout_ms % 1000) * 1000000L;
-        nanosleep(&ts, NULL);
+    // If there are no select events and no listeners, just sleep
+    if (synclist_is_empty(&glb->select_events) && synclist_is_empty(&glb->listeners)) {
+        if (timeout_ms > 0) {
+            struct timespec ts;
+            ts.tv_sec = timeout_ms / 1000;
+            ts.tv_nsec = (long) (timeout_ms % 1000) * 1000000L;
+            nanosleep(&ts, NULL);
+        }
+        return;
     }
-    // timeout_ms == 0: return immediately (non-blocking check)
-    // timeout_ms < 0 (wait forever): should not happen in practice since
-    //   the scheduler always has a finite timeout or work to do.
+
+    // Rebuild the pollfd array if the select_events set is dirty
+    int select_events_poll_count = platform->select_events_poll_count;
+    struct pollfd *fds = platform->fds;
+    int fd_index = 0;
+
+    if (select_events_poll_count < 0) {
+        struct ListHead *select_events = synclist_wrlock(&glb->select_events);
+        size_t select_events_new_count;
+        select_event_count_and_destroy_closed(select_events, NULL, NULL, &select_events_new_count, glb);
+
+        fds = realloc(fds, sizeof(struct pollfd) * select_events_new_count);
+        platform->fds = fds;
+
+        struct ListHead *item;
+        fd_index = 0;
+        LIST_FOR_EACH (item, select_events) {
+            struct SelectEvent *select_event = GET_LIST_ENTRY(item, struct SelectEvent, head);
+            if (select_event->read || select_event->write) {
+                fds[fd_index].fd = select_event->event;
+                fds[fd_index].events = (select_event->read ? POLLIN : 0) | (select_event->write ? POLLOUT : 0);
+                fds[fd_index].revents = 0;
+                fd_index++;
+            }
+        }
+        platform->select_events_poll_count = (int) select_events_new_count;
+        select_events_poll_count = (int) select_events_new_count;
+        synclist_unlock(&glb->select_events);
+    }
+
+    if (select_events_poll_count == 0) {
+        // No fds to poll — just sleep
+        if (timeout_ms > 0) {
+            struct timespec ts;
+            ts.tv_sec = timeout_ms / 1000;
+            ts.tv_nsec = (long) (timeout_ms % 1000) * 1000000L;
+            nanosleep(&ts, NULL);
+        }
+        return;
+    }
+
+    int nb_descriptors = poll(fds, (nfds_t) select_events_poll_count, timeout_ms);
+
+    for (int i = 0; i < select_events_poll_count && nb_descriptors > 0; i++) {
+        if (!(fds[i].revents & fds[i].events)) {
+            continue;
+        }
+        bool is_read = fds[i].revents & POLLIN;
+        bool is_write = fds[i].revents & POLLOUT;
+        fds[i].revents = 0;
+        nb_descriptors--;
+
+        select_event_notify(fds[i].fd, is_read, is_write, glb);
+    }
 }
 
 void sys_time(struct timespec *t)
@@ -256,13 +312,19 @@ void sys_init_platform(GlobalContext *global)
     if (UNLIKELY(!platform)) {
         AVM_ABORT();
     }
-    platform->dummy = 0;
+    platform->fds = NULL;
+    platform->fds_count = 0;
+    platform->select_events_poll_count = -1;
     global->platform_data = platform;
+
+    otp_net_init(global);
+    otp_socket_init(global);
 }
 
 void sys_free_platform(GlobalContext *global)
 {
     struct WASIPlatformData *platform = global->platform_data;
+    free(platform->fds);
     free(platform);
 }
 
@@ -286,16 +348,18 @@ void sys_unregister_listener(GlobalContext *global, struct EventListener *listen
 
 void sys_register_select_event(GlobalContext *global, ErlNifEvent event, bool is_write)
 {
-    UNUSED(global);
     UNUSED(event);
     UNUSED(is_write);
+    struct WASIPlatformData *platform = global->platform_data;
+    platform->select_events_poll_count = -1; // mark dirty, rebuild on next poll
 }
 
 void sys_unregister_select_event(GlobalContext *global, ErlNifEvent event, bool is_write)
 {
-    UNUSED(global);
     UNUSED(event);
     UNUSED(is_write);
+    struct WASIPlatformData *platform = global->platform_data;
+    platform->select_events_poll_count = -1; // mark dirty, rebuild on next poll
 }
 
 // ---------------------------------------------------------------------------

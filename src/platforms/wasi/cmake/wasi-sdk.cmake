@@ -54,8 +54,8 @@ set(CMAKE_C_COMPILER "${WASI_SDK_PATH}/bin/clang")
 set(CMAKE_CXX_COMPILER "${WASI_SDK_PATH}/bin/clang++")
 set(CMAKE_AR "${WASI_SDK_PATH}/bin/llvm-ar")
 set(CMAKE_RANLIB "${WASI_SDK_PATH}/bin/llvm-ranlib")
-set(CMAKE_C_COMPILER_TARGET "wasm32-wasip1")
-set(CMAKE_CXX_COMPILER_TARGET "wasm32-wasip1")
+set(CMAKE_C_COMPILER_TARGET "wasm32-wasip2")
+set(CMAKE_CXX_COMPILER_TARGET "wasm32-wasip2")
 set(CMAKE_SYSROOT "${WASI_SDK_PATH}/share/wasi-sysroot")
 
 # wasm32-wasi cannot produce executables for try_compile by default.

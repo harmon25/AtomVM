@@ -40,4 +40,78 @@ static inline void tzset(void)
     /* No-op: WASI has no timezone database */
 }
 
+/*
+ * WASI sockets are always non-blocking, but fcntl(fd, F_SETFL, O_NONBLOCK)
+ * returns an error since WASI doesn't support modifying socket flags this way.
+ * Provide a wrapper that silently succeeds for F_SETFL + O_NONBLOCK.
+ */
+#include <fcntl.h>
+#include <stdarg.h>
+#include <unistd.h>
+#include <poll.h>
+#include <errno.h>
+#include <sys/socket.h>
+
+static inline int wasi_fcntl(int fd, int cmd, ...)
+{
+    va_list ap;
+    va_start(ap, cmd);
+    int arg = va_arg(ap, int);
+    va_end(ap);
+
+    if (cmd == F_SETFL && (arg & O_NONBLOCK)) {
+        /* WASI sockets are always non-blocking; silently succeed */
+        return 0;
+    }
+    if (cmd == F_GETFL) {
+        /* Return a reasonable default; O_NONBLOCK is set */
+        return O_NONBLOCK;
+    }
+    /* For other commands, let the real fcntl handle it (will likely fail) */
+    return -1;
+}
+
+#define fcntl wasi_fcntl
+
+/*
+ * WASI connect() on non-blocking sockets returns EINPROGRESS, but the
+ * otp_socket.c code doesn't handle waiting for connection completion.
+ * Provide a wrapper that blocks until the connection completes or fails.
+ */
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+static inline int wasi_connect(int fd, const struct sockaddr *addr, socklen_t len)
+{
+    int res = connect(fd, addr, len);
+    if (res < 0 && errno == EINPROGRESS) {
+        /* Wait for connection to complete using poll */
+        struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+        int poll_res = poll(&pfd, 1, 30000); /* 30 second timeout */
+        if (poll_res > 0) {
+            /* Check if connection succeeded */
+            int so_error = 0;
+            socklen_t so_len = sizeof(so_error);
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) == 0) {
+                if (so_error == 0) {
+                    /* Connection succeeded */
+                    return 0;
+                } else {
+                    /* Connection failed, set errno */
+                    errno = so_error;
+                    return -1;
+                }
+            }
+        } else if (poll_res == 0) {
+            /* Timeout */
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        /* Poll failed, return original error */
+    }
+    return res;
+}
+
+#define connect wasi_connect
+
 #endif

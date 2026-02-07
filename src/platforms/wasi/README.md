@@ -15,8 +15,9 @@ can run Erlang and Elixir programs inside any WASI-compatible runtime such as
 
 ## Prerequisites
 
-* **wasi-sdk** (>= 20) -- the Clang/LLVM toolchain targeting `wasm32-wasip1`.
+* **wasi-sdk** (>= 30) -- the Clang/LLVM toolchain targeting `wasm32-wasip2`.
   Download from <https://github.com/WebAssembly/wasi-sdk/releases>.
+  Version 30+ is required for socket support via `wasi:sockets`.
 * **CMake** (>= 3.13)
 * **A WASI runtime** to execute the resulting binary. For example:
   ```
@@ -61,12 +62,16 @@ and the AtomVM Erlang standard library (`estdlib.avm`):
 cmake -S . -B build
 cmake --build build --target PackBEAM
 cmake --build build --target estdlib
+cmake --build build --target eavmlib
 ```
 
 After this you will have:
 
 * `build/tools/packbeam/PackBEAM` -- the packaging tool
 * `build/libs/estdlib/src/estdlib.avm` -- the standard library archive
+* `build/libs/eavmlib/src/eavmlib.avm` -- the AtomVM extended library
+  (required for `io:format`, `console` module, and the `atomvm` module's
+  POSIX file NIFs)
 
 ## Creating an .avm file
 
@@ -90,10 +95,13 @@ build/tools/packbeam/PackBEAM hello.avm hello.beam
 ```
 
 If your program uses standard library modules (e.g. `maps`, `lists`,
-`gen_server`, `io`, etc.), include `estdlib.avm` when packaging:
+`gen_server`, `io`, etc.), include `estdlib.avm` and `eavmlib.avm` when
+packaging:
 
 ```sh
-build/tools/packbeam/PackBEAM myapp.avm myapp.beam build/libs/estdlib/src/estdlib.avm
+build/tools/packbeam/PackBEAM myapp.avm myapp.beam \
+  build/libs/estdlib/src/estdlib.avm \
+  build/libs/eavmlib/src/eavmlib.avm
 ```
 
 ## Running
@@ -126,6 +134,80 @@ Run with `-h` to see usage:
 wasmtime build-wasi/AtomVM.wasm -- -h
 ```
 
+## Console output
+
+There are two ways to produce console output:
+
+### `erlang:display/1`
+
+Always available, writes to stderr using Erlang term formatting:
+
+```erlang
+erlang:display(hello_world).    %% prints: hello_world
+erlang:display({ok, 42}).       %% prints: {ok,42}
+```
+
+### `io:format/1,2`
+
+Requires `eavmlib.avm` to be bundled (for the `console` module). Uses the
+standard Erlang IO protocol:
+
+```erlang
+io:format("Hello ~s! The answer is ~p~n", ["world", 42]).
+```
+
+`io:format` works because the default group leader is `self()`, which causes
+`io:put_chars` to call the `console:print/1` NIF directly (`fprintf(stdout)`).
+
+## File I/O
+
+WASI supports file operations through the AtomVM POSIX NIFs. The WASI runtime
+must be given explicit access to directories via `--dir=` flags.
+
+### Example: writing and reading a file
+
+```erlang
+%% Grant access: wasmtime --dir=/tmp/mydir build-wasi/AtomVM.wasm -- ...
+
+%% Write
+{ok, Fd} = atomvm:posix_open("/tmp/mydir/output.txt",
+                              [o_wronly, o_creat, o_trunc], 8#644),
+{ok, _BytesWritten} = atomvm:posix_write(Fd, <<"Hello WASI!\n">>),
+ok = atomvm:posix_close(Fd).
+
+%% Read
+{ok, Fd2} = atomvm:posix_open("/tmp/mydir/output.txt", [o_rdonly]),
+{ok, Data} = atomvm:posix_read(Fd2, 4096),
+ok = atomvm:posix_close(Fd2).
+```
+
+### Important notes
+
+* **`posix_open/3` is required when using `o_creat`** -- the third argument is
+  the file permission mode (e.g. `8#644`). Using `posix_open/2` with `o_creat`
+  raises `badarg`.
+* **`posix_write/2` returns `{ok, BytesWritten}`**, not bare `ok`.
+* **`posix_readdir/1` returns `eof`** (not `error`) at end-of-directory.
+* **WASI filesystem sandboxing** -- The WASI runtime only grants access to
+  directories specified with `--dir=`. Paths must be reachable from a
+  pre-opened directory.
+
+### Directory listing
+
+```erlang
+{ok, Dir} = atomvm:posix_opendir("/tmp/mydir"),
+loop(Dir).
+
+loop(Dir) ->
+    case atomvm:posix_readdir(Dir) of
+        {ok, {dirent, _Inode, Name}} ->
+            erlang:display(Name),
+            loop(Dir);
+        eof ->
+            atomvm:posix_closedir(Dir)
+    end.
+```
+
 ## What works
 
 The following VM features have been tested and work correctly on WASI:
@@ -141,6 +223,15 @@ The following VM features have been tested and work correctly on WASI:
 * Pattern matching and guards
 * Standard library modules when bundled (e.g. `erlang`, `maps`, `lists`)
 * `erlang:display/1` for output
+* `io:format/1,2` for formatted output (requires `eavmlib.avm` bundled)
+* File I/O via POSIX NIFs (`atomvm:posix_open/2,3`, `posix_read/2`,
+  `posix_write/2`, `posix_close/1`)
+* Directory operations (`atomvm:posix_opendir/1`, `posix_readdir/1`,
+  `posix_closedir/1`)
+* `file:get_cwd/0`
+* Console port driver (`open_port({spawn, "console"}, [])`)
+* Socket API (`socket:open/3`, `socket:connect/2`, `socket:close/1`, etc.)
+  for localhost connections (external connections have known issues)
 
 ## Platform constraints
 
@@ -151,28 +242,81 @@ apply compared to the `generic_unix` platform:
 |---------|--------|--------|
 | SMP / threads | Disabled | WASI MVP has no thread support |
 | JIT compilation | Disabled | No `mmap`/`mprotect` in WASI |
-| Networking (TCP/UDP) | Not available | WASI sockets proposal not yet stable |
+| Networking (TCP/UDP) | Partial | Socket API compiles; external connections may hang (upstream wasmtime issue) |
 | `mmap`-based file loading | Replaced with `read()` | No `mmap` in WASI |
 | Port drivers (`dlopen`) | Not available | No dynamic linking in WASI |
-| `epoll`/`select`/`poll` | Not available | `sys_poll_events` uses `nanosleep` |
+| `epoll`/`select`/`poll` | Partial | Uses `poll()` for socket events; timers use `nanosleep` |
 | MbedTLS / crypto | Not available | No SSL/TLS support |
 | `erlang:localtime/0` | Returns UTC | WASI has no timezone database (`tzset` is a no-op) |
+
+## Networking (experimental)
+
+The WASI platform now includes the `socket` module (TCP/UDP sockets) via the
+`wasi:sockets` interface. This is **experimental** and has known limitations:
+
+### What works
+
+* **Socket creation** -- `socket:open/3` for both TCP (stream) and UDP (dgram)
+* **Localhost connections** -- Connections to `127.0.0.1` work correctly
+* **Socket options** -- Basic options like `SO_REUSEADDR`, `SO_KEEPALIVE`, etc.
+* **Non-blocking mode** -- WASI sockets are always non-blocking (handled transparently)
+
+### Known issues
+
+* **External connections hang** -- Connections to external IP addresses (e.g.,
+  `54.208.3.199:80`) hang indefinitely. This appears to be an upstream issue
+  with wasmtime's WASI Preview 2 socket implementation or wasi-sdk's POSIX
+  socket shim. See [wasmtime#9849](https://github.com/bytecodealliance/wasmtime/issues/9849)
+  for related issues.
+* **Error code mapping** -- Some socket errors may report as `closed` instead
+  of the specific error code (e.g., `econnrefused`).
+
+### Running with network access
+
+Enable networking in wasmtime:
+
+```sh
+wasmtime --dir=/ \
+  -S inherit-network \
+  -S tcp \
+  -S udp \
+  -S allow-ip-name-lookup \
+  build-wasi/AtomVM.wasm -- myapp.avm
+```
+
+### Example
+
+```erlang
+-module(socket_test).
+-export([start/0]).
+
+start() ->
+    {ok, Socket} = socket:open(inet, stream, tcp),
+    %% Localhost connections work
+    case socket:connect(Socket, #{family => inet, addr => {127,0,0,1}, port => 8080}) of
+        ok -> io:format("Connected!~n");
+        {error, econnrefused} -> io:format("No server running~n")
+    end,
+    socket:close(Socket).
+```
 
 ## File layout
 
 ```
 src/platforms/wasi/
 ├── cmake/
-│   └── wasi-sdk.cmake              # CMake toolchain file for wasi-sdk
+│   └── wasi-sdk.cmake              # CMake toolchain file for wasi-sdk (wasm32-wasip2)
 ├── lib/
 │   ├── CMakeLists.txt              # Platform library build
+│   ├── otp_socket_platform.c       # Socket platform support (supports_peek)
+│   ├── otp_socket_platform.h       # Socket platform defines (SO_LINGER fallback)
 │   ├── platform_defaultatoms.c     # Atom registration (X-macro)
 │   ├── platform_defaultatoms.def   # Defines the "wasi" atom
 │   ├── platform_defaultatoms.h     # Atom declarations (X-macro)
-│   ├── platform_nifs.c             # atomvm:platform/0 -> 'wasi'
-│   ├── sys.c                       # WASI sys.h implementation
-│   ├── wasi_compat.h               # Shims for missing wasi-libc functions
-│   └── wasi_sys.h                  # Platform data structures
+│   ├── platform_nifs.c             # Platform NIFs (atomvm:platform/0, socket, net)
+│   ├── sys.c                       # WASI sys.h implementation with poll()-based events
+│   ├── wasi_compat.h               # Shims for fcntl, connect, tzset, etc.
+│   └── wasi_sys.h                  # Platform data structures with pollfd array
 ├── CMakeLists.txt                  # Top-level standalone build
 ├── main.c                          # Entry point
 └── README.md                       # This file
@@ -197,3 +341,8 @@ src/platforms/wasi/
 
 * **Single-threaded only** -- `AVM_DISABLE_SMP` is set unconditionally. All
   SMP-related code paths (locks, thread creation) are compiled out.
+
+* **Socket support via poll()** -- WASI Preview 2 provides sockets through
+  the `wasi:sockets` interface. We implement `sys_poll_events()` using `poll()`
+  to wait for socket I/O events, and provide shims for `fcntl()` and `connect()`
+  to handle WASI's always-non-blocking sockets.

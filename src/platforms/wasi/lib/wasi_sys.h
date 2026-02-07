@@ -23,12 +23,11 @@
 
 #include <list.h>
 #include <sys.h>
+#include <poll.h>
 
 /**
  * @brief WASI platform event listener type.
- * @details On WASI, there is no fd-based I/O multiplexing (no poll/select/epoll).
- * This type is defined to satisfy the listeners.h framework requirements but
- * is not actively used in the MVP.
+ * @details On WASI p2, fds (including sockets) can be polled using poll(2).
  */
 typedef int listener_event_t;
 
@@ -36,17 +35,19 @@ struct EventListener
 {
     struct ListHead listeners_list_head;
     event_handler_t handler;
-    int fd; // placeholder, not used in WASI MVP
+    int fd;
 };
 
 /**
  * @brief WASI platform data.
- * @details Minimal platform state for the WASI target. No event loop fds,
- * no signal mechanism, no threading.
+ * @details Holds the dynamic pollfd array used by sys_poll_events for
+ * I/O multiplexing on sockets and listeners.
  */
 struct WASIPlatformData
 {
-    int dummy; // Placeholder to avoid empty struct
+    struct pollfd *fds;             // dynamically allocated pollfd array
+    int fds_count;                  // current allocation size
+    int select_events_poll_count;   // -1 = dirty, rebuild needed
 };
 
 #endif
