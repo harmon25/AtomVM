@@ -45,5 +45,11 @@ for dep_dir in "${DEPS_BAK}/wasi-http/wit/deps/"*/; do
     cp -r "${dep_dir}" "${DEPS_OUT}/${dep_name}"
 done
 
+# Copy Spin-specific interfaces (fermyon:spin@2.0.0)
+if [ -d "${DEPS_BAK}/spin" ]; then
+    mkdir -p "${DEPS_OUT}/spin"
+    cp "${DEPS_BAK}/spin/"*.wit "${DEPS_OUT}/spin/"
+fi
+
 echo "WIT dependencies populated in ${DEPS_OUT}/"
 ls -1d "${DEPS_OUT}"/*/

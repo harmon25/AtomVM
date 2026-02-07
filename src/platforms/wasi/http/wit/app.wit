@@ -13,6 +13,12 @@ world app {
   // Import outgoing-handler for making outbound HTTP requests from Erlang/Elixir
   import wasi:http/outgoing-handler@0.2.8;
 
+  // Import Spin platform interfaces
+  import fermyon:spin/key-value@2.0.0;
+  import fermyon:spin/sqlite@2.0.0;
+  import fermyon:spin/rdbms-types@2.0.0;
+  import fermyon:spin/postgres@2.0.0;
+
   // Export the incoming-handler interface for Spin HTTP triggers
   export wasi:http/incoming-handler@0.2.8;
 }

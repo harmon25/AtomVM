@@ -100,6 +100,7 @@ if(AVM_BUILD_HTTP_COMPONENT)
         ${HTTP_DIR}/wasi_http_handler.c
         ${HTTP_DIR}/wasi_http_outbound.c
         ${HTTP_DIR}/wasi_http_nifs.c
+        ${HTTP_DIR}/wasi_spin_nifs.c
         ${HTTP_DIR}/generated/app.c
     )
     set_target_properties(AtomVM_http PROPERTIES
