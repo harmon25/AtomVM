@@ -46,8 +46,21 @@ handle(#{method := _Method, path := Path}) ->
 3. **Compile to .avm**:
 ```bash
 erlc spin_handler.erl
-packbeam create app.avm spin_handler.beam
+
+# Compile platform NIF stubs (required for spin_http, spin_kv, etc.)
+erlc src/platforms/wasi/http/spin_http.erl \
+     src/platforms/wasi/http/spin_kv.erl \
+     src/platforms/wasi/http/spin_config.erl \
+     src/platforms/wasi/http/spin_sqlite.erl \
+     src/platforms/wasi/http/spin_postgres.erl
+
+packbeam create app.avm spin_handler.beam \
+    spin_http.beam spin_kv.beam spin_config.beam \
+    spin_sqlite.beam spin_postgres.beam \
+    estdlib.avm eavmlib.avm
 ```
+
+Or use the build script: `examples/erlang/wasi/build_and_run.sh`
 
 4. **Create `spin.toml`**:
 ```toml
@@ -64,6 +77,8 @@ component = "atomvm"
 [component.atomvm]
 source = "AtomVM_http.wasm"
 files = [{ source = "app.avm", destination = "/app.avm" }]
+key_value_stores = ["default"]
+allowed_outbound_hosts = ["https://*:*"]
 ```
 
 5. **Run**:

@@ -24,17 +24,29 @@
 #
 # ## Building
 #
-#   # Compile
+#   # Quickest way: use the build script
+#   ./build_and_run.sh
+#
+#   # Or manually:
+#
+#   # 1. Compile the handler
 #   elixirc --no-docs --no-debug-info spin_handler.ex
 #
-#   # Package (include estdlib for :erlang, :lists, :maps, etc.)
-#   packbeam create app.avm Elixir.SpinHandler.beam estdlib.avm eavmlib.avm
+#   # 2. Compile the platform NIF stubs (spin_http, spin_kv, etc.)
+#   #    These .beam files must be in the AVM pack for the NIF dispatch to work.
+#   erlc src/platforms/wasi/http/spin_http.erl \
+#        src/platforms/wasi/http/spin_kv.erl \
+#        src/platforms/wasi/http/spin_config.erl \
+#        src/platforms/wasi/http/spin_sqlite.erl \
+#        src/platforms/wasi/http/spin_postgres.erl
+#
+#   # 3. Package (handler + NIF stubs + standard libraries)
+#   packbeam create app.avm Elixir.SpinHandler.beam \
+#       spin_http.beam spin_kv.beam spin_config.beam \
+#       spin_sqlite.beam spin_postgres.beam \
+#       estdlib.avm eavmlib.avm
 #
 # ## Running
-#
-#   # With wasmtime serve:
-#   wasmtime serve --dir=. build-wasi/AtomVM_http.wasm
-#   curl http://localhost:8080/
 #
 #   # With Spin (see spin.toml):
 #   spin up

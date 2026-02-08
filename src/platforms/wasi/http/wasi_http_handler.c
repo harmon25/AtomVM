@@ -336,6 +336,10 @@ void exports_wasi_http_incoming_handler_handle(
         goto cleanup_request;
     }
 
+    // Mark as leader so the scheduler exits when handle/1 returns.
+    // Without this, the scheduler loop runs forever waiting for more work.
+    ctx->leader = 1;
+
     if (UNLIKELY(memory_ensure_free(ctx, total_heap) != MEMORY_GC_OK)) {
         send_error_response(response_out, 500, "AtomVM out of memory");
         context_destroy(ctx);
@@ -401,17 +405,20 @@ void exports_wasi_http_incoming_handler_handle(
     // 3. Call the handler: spin_handler:handle/1 or Elixir.SpinHandler:handle/1
     // -----------------------------------------------------------------------
 
-    // Look up the handler module — try Erlang name first, then Elixir name
+    // Look up the handler module — try Elixir name first (since the startup
+    // module is typically already loaded into the module table), then Erlang.
+    // This avoids a spurious "Failed load module: spin_handler.beam" warning
+    // when using an Elixir handler.
     Module *handler_mod = NULL;
 
-    // Try: spin_handler (Erlang)
-    term erl_mod_atom = globalcontext_make_atom(glb, ATOM_STR("\xC", "spin_handler"));
-    handler_mod = globalcontext_get_module(glb, term_to_atom_index(erl_mod_atom));
+    // Try: Elixir.SpinHandler (Elixir)
+    term ex_mod_atom = globalcontext_make_atom(glb, ATOM_STR("\x12", "Elixir.SpinHandler"));
+    handler_mod = globalcontext_get_module(glb, term_to_atom_index(ex_mod_atom));
 
     if (!handler_mod) {
-        // Try: Elixir.SpinHandler (Elixir)
-        term ex_mod_atom = globalcontext_make_atom(glb, ATOM_STR("\x12", "Elixir.SpinHandler"));
-        handler_mod = globalcontext_get_module(glb, term_to_atom_index(ex_mod_atom));
+        // Try: spin_handler (Erlang)
+        term erl_mod_atom = globalcontext_make_atom(glb, ATOM_STR("\xC", "spin_handler"));
+        handler_mod = globalcontext_get_module(glb, term_to_atom_index(erl_mod_atom));
     }
 
     if (!handler_mod) {
@@ -427,6 +434,12 @@ void exports_wasi_http_incoming_handler_handle(
 
     // Execute handle/1
     int exec_err = context_execute_loop(ctx, handler_mod, "handle", 1);
+
+    // Reset scheduler_stop_all so subsequent requests can run.
+    // context_execute_loop enters the scheduler loop, and the leader process
+    // sets scheduler_stop_all=true when it terminates. We must clear this
+    // for the next request in reactor mode.
+    glb->scheduler_stop_all = false;
 
     if (exec_err) {
         send_error_response(response_out, 500, "Handler execution error");

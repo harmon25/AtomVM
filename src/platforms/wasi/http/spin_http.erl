@@ -51,29 +51,29 @@ request(_Request) ->
 %% @doc Make a GET request.
 -spec get(binary()) -> {ok, map()} | {error, term()}.
 get(Url) ->
-    request(#{method => get, url => Url, headers => [], body => <<>>}).
+    ?MODULE:request(#{method => get, url => Url, headers => [], body => <<>>}).
 
 %% @doc Make a GET request with custom headers.
 -spec get(binary(), [{binary(), binary()}]) -> {ok, map()} | {error, term()}.
 get(Url, Headers) ->
-    request(#{method => get, url => Url, headers => Headers, body => <<>>}).
+    ?MODULE:request(#{method => get, url => Url, headers => Headers, body => <<>>}).
 
 %% @doc Make a POST request.
 -spec post(binary(), [{binary(), binary()}], binary()) -> {ok, map()} | {error, term()}.
 post(Url, Headers, Body) ->
-    request(#{method => post, url => Url, headers => Headers, body => Body}).
+    ?MODULE:request(#{method => post, url => Url, headers => Headers, body => Body}).
 
 %% @doc Make a PUT request.
 -spec put(binary(), [{binary(), binary()}], binary()) -> {ok, map()} | {error, term()}.
 put(Url, Headers, Body) ->
-    request(#{method => put, url => Url, headers => Headers, body => Body}).
+    ?MODULE:request(#{method => put, url => Url, headers => Headers, body => Body}).
 
 %% @doc Make a DELETE request.
 -spec delete(binary()) -> {ok, map()} | {error, term()}.
 delete(Url) ->
-    request(#{method => delete, url => Url, headers => [], body => <<>>}).
+    ?MODULE:request(#{method => delete, url => Url, headers => [], body => <<>>}).
 
 %% @doc Make a DELETE request with custom headers.
 -spec delete(binary(), [{binary(), binary()}]) -> {ok, map()} | {error, term()}.
 delete(Url, Headers) ->
-    request(#{method => delete, url => Url, headers => Headers, body => <<>>}).
+    ?MODULE:request(#{method => delete, url => Url, headers => Headers, body => <<>>}).

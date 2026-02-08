@@ -224,7 +224,7 @@ Compile and package:
 
 ```bash
 elixirc --no-docs --no-debug-info spin_handler.ex
-packbeam create app.avm Elixir.SpinHandler.beam estdlib.avm eavmlib.avm
+packbeam  app.avm Elixir.SpinHandler.beam estdlib.avm eavmlib.avm
 ```
 
 The runtime tries both `spin_handler` (Erlang) and `Elixir.SpinHandler` (Elixir)

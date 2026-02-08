@@ -15,3 +15,6 @@ component = "atomvm"
 source = "AtomVM_http.wasm"
 # Mount the .avm file into the WASI filesystem
 files = [{ source = "app.avm", destination = "/app.avm" }]
+# Enable Spin platform features
+key_value_stores = ["default"]
+allowed_outbound_hosts = ["https://*:*"]
