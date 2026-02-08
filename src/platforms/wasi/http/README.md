@@ -3,12 +3,12 @@
 ## Status: Implemented
 
 AtomVM supports the `wasi:http/incoming-handler` interface, enabling Erlang/Elixir
-HTTP handlers to run as Spin components or via `wasmtime serve`.
+HTTP handlers to run as Spin components.
 
 ## Architecture
 
 ```
-HTTP Request (Spin / wasmtime serve)
+HTTP Request (Spin)
         │
         ▼
 ┌─────────────────────────────┐
@@ -20,14 +20,14 @@ HTTP Request (Spin / wasmtime serve)
               ▼
 ┌─────────────────────────────┐
 │  wasi_http_handler.c        │  Extracts request → Erlang map
-│                             │  Calls spin_handler:handle/1
+│                             │  Calls handler:handle/1
 │                             │  Converts response map → WASI
 └─────────────┬───────────────┘
               │
               ▼
 ┌─────────────────────────────┐
 │  AtomVM BEAM Interpreter    │  Runs your Erlang/Elixir code
-│  spin_handler:handle/1      │
+│  SpinHandler / spin_handler │
 └─────────────────────────────┘
 ```
 
@@ -84,10 +84,21 @@ handle(#{method := Method, path := Path, body := Body}) ->
 ### 3. Compile to .avm
 
 ```bash
-# Using erlc + packbeam (from AtomVM tools)
 erlc spin_handler.erl
-packbeam create app.avm spin_handler.beam
+
+# Compile platform NIF stubs (required for spin_http, spin_kv, etc.)
+erlc src/platforms/wasi/http/spin_http.erl \
+     src/platforms/wasi/http/spin_kv.erl \
+     src/platforms/wasi/http/spin_config.erl \
+     src/platforms/wasi/http/spin_sqlite.erl \
+     src/platforms/wasi/http/spin_postgres.erl
+
+packbeam create app.avm spin_handler.beam \
+    spin_http.beam spin_kv.beam spin_config.beam \
+    spin_sqlite.beam spin_postgres.beam
 ```
+
+Or use the build script: `examples/erlang/wasi/build_and_run.sh`
 
 ### 4. Run with Spin
 
@@ -107,19 +118,14 @@ component = "atomvm"
 [component.atomvm]
 source = "AtomVM_http.wasm"
 files = [{ source = "app.avm", destination = "/app.avm" }]
+key_value_stores = ["default"]
+allowed_outbound_hosts = ["https://*:*"]
 ```
 
 ```bash
 spin up
 curl http://localhost:3000/
 # => Hello from AtomVM!
-```
-
-### 5. Run with wasmtime serve
-
-```bash
-wasmtime serve --dir=. build-wasi/AtomVM_http.wasm
-curl http://localhost:8080/
 ```
 
 ## Handler API
@@ -198,7 +204,7 @@ wit-bindgen c wit/ --out-dir generated/
    `wasi:http/incoming-handler.handle`, we:
    - Extract method, path, headers, and body from WASI resources
    - Build an Erlang map on a fresh Context's heap
-   - Call `spin_handler:handle/1` via `context_execute_loop`
+   - Call the handler's `handle/1` via `context_execute_loop`
    - Parse the returned Erlang response map
    - Send the response back through WASI's `response-outparam`
 
@@ -224,19 +230,28 @@ Compile and package:
 
 ```bash
 elixirc --no-docs --no-debug-info spin_handler.ex
-packbeam  app.avm Elixir.SpinHandler.beam estdlib.avm eavmlib.avm
+
+# Compile platform NIF stubs
+erlc src/platforms/wasi/http/spin_http.erl \
+     src/platforms/wasi/http/spin_kv.erl \
+     src/platforms/wasi/http/spin_config.erl \
+     src/platforms/wasi/http/spin_sqlite.erl \
+     src/platforms/wasi/http/spin_postgres.erl
+
+packbeam create app.avm Elixir.SpinHandler.beam \
+    spin_http.beam spin_kv.beam spin_config.beam \
+    spin_sqlite.beam spin_postgres.beam \
+    estdlib.avm eavmlib.avm
 ```
 
-The runtime tries both `spin_handler` (Erlang) and `Elixir.SpinHandler` (Elixir)
-module names automatically.
-
-See `examples/spin/spin_handler.ex` for a full Elixir example.
+The runtime tries `Elixir.SpinHandler` (Elixir) first, then `spin_handler`
+(Erlang) as a fallback. See `examples/elixir/wasi/` for a full Elixir example
+with a build script (`build_and_run.sh`).
 
 ## Limitations
 
 - **Synchronous**: Each request blocks the single-threaded WASM instance.
-  This is fine for Spin (which creates instances per-request) and for
-  sequential request handling in wasmtime.
+  This is fine for Spin, which creates instances per-request.
 - **No streaming**: The entire request body is buffered in memory before
   being passed to the handler. Response bodies are also fully buffered.
 - **Module name**: The handler module must be named `spin_handler` (Erlang)

@@ -110,14 +110,6 @@ curl http://localhost:3000/
 
 You can also return a plain `binary()` as a shorthand for 200 OK text/plain.
 
-### Testing with wasmtime serve
-
-```bash
-# No Spin needed — wasmtime works directly
-wasmtime serve --dir=. build-wasi/AtomVM_http.wasm
-curl http://localhost:8080/
-```
-
 ---
 
 ## ✅ Command Trigger (Also Working)

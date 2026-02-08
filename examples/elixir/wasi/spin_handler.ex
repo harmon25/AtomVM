@@ -1,7 +1,7 @@
 # SpinHandler - Elixir HTTP handler for AtomVM on Fermyon Spin
 #
 # This module implements the handler callback for the wasi:http/incoming-handler
-# integration. When Spin (or wasmtime serve) receives an HTTP request, AtomVM
+# integration. When Spin receives an HTTP request, AtomVM
 # calls SpinHandler.handle/1 with a request map and expects a response map back.
 #
 # ## Request Map

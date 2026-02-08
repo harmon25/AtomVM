@@ -23,13 +23,13 @@
  * @brief Implementation of the wasi:http/incoming-handler export for AtomVM.
  *
  * This file implements the `handle` function required by the
- * `wasi:http/incoming-handler` interface. When Spin (or wasmtime serve)
- * receives an HTTP request, it calls this exported function. We:
+ * `wasi:http/incoming-handler` interface. When Spin receives an HTTP
+ * request, it calls this exported function. We:
  *
  * 1. Extract the HTTP request data (method, path, headers, body) from
  *    WASI component model resources.
  * 2. Build an Erlang map representing the request.
- * 3. Call the user's Erlang handler function (spin_handler:handle/1).
+ * 3. Call the user's handler (Elixir.SpinHandler:handle/1 or spin_handler:handle/1).
  * 4. Parse the Erlang response map and send it back via WASI's
  *    response-outparam.
  */
@@ -402,7 +402,7 @@ void exports_wasi_http_incoming_handler_handle(
     }
 
     // -----------------------------------------------------------------------
-    // 3. Call the handler: spin_handler:handle/1 or Elixir.SpinHandler:handle/1
+    // 3. Call the handler: Elixir.SpinHandler:handle/1 or spin_handler:handle/1
     // -----------------------------------------------------------------------
 
     // Look up the handler module — try Elixir name first (since the startup

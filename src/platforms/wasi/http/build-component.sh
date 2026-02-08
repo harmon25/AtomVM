@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the AtomVM HTTP component for Spin/wasmtime serve.
+# Build the AtomVM HTTP component for Fermyon Spin.
 #
 # This script:
 # 1. Fetches WIT dependencies (from vendored deps.bak/)
@@ -125,10 +125,6 @@ print_summary() {
 ${GREEN}=== Build Complete ===${NC}
 
 Component:    ${BUILD_DIR}/AtomVM_http.wasm (${COMP_SIZE} bytes)
-
-To test with wasmtime serve:
-  wasmtime serve --dir=. ${BUILD_DIR}/AtomVM_http.wasm
-  curl http://localhost:8080/
 
 To test with Spin:
   spin up    # (with spin.toml in current directory)
