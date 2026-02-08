@@ -302,9 +302,59 @@ start() ->
 
 ## Fermyon Spin
 
+AtomVM has two build targets: `AtomVM.wasm` (command-line, standard WASI) and
+`AtomVM_http.wasm` (HTTP handler with Spin platform APIs). The table below
+summarizes runtime compatibility:
+
+| Binary | wasmtime | Spin | Notes |
+|--------|----------|------|-------|
+| `AtomVM.wasm` | Yes | Yes (command trigger) | Standard WASI only; no HTTP |
+| `AtomVM_http.wasm` | **No** | Yes (HTTP trigger) | Requires Spin host imports |
+
+### Why `AtomVM_http.wasm` requires Spin
+
+The HTTP component's WIT world (`http/wit/app.wit`) imports Spin-specific
+interfaces that are not part of standard WASI:
+
+```
+import fermyon:spin/key-value@2.0.0;
+import fermyon:spin/sqlite@2.0.0;
+import fermyon:spin/postgres@2.0.0;
+import wasi:config/store@0.2.0-draft-2024-09-27;
+```
+
+These are **unconditional imports** in the WASM component type — even if your
+handler never calls `spin_kv` or `spin_sqlite`, the component model requires
+the host to provide an implementation for every declared import at
+instantiation time. Runtimes like `wasmtime serve` only provide the standard
+WASI interfaces and will fail with:
+
+```
+Error: component imports instance `fermyon:spin/key-value@2.0.0`,
+       but a matching implementation was not found in the linker
+```
+
+### Making it work with other runtimes
+
+To run on plain wasmtime or other WASI runtimes, you would need to build a
+separate component that only imports standard WASI interfaces. This would
+involve:
+
+1. Creating an alternative WIT world (e.g., `app-wasi.wit`) that removes the
+   `fermyon:spin/*` and `wasi:config/*` imports
+2. Regenerating the C bindings with `wit-bindgen c wit-wasi/ --out-dir generated/`
+3. Gating the Spin NIF modules (`spin_kv`, `spin_config`, `spin_sqlite`,
+   `spin_postgres`) behind a compile-time flag
+4. Building with `wasmtime serve` as the target
+
+The `spin_http` module (outbound HTTP) uses `wasi:http/outgoing-handler`, which
+IS part of standard WASI and would work on any runtime. Only the Spin-specific
+stores and databases require the Spin host.
+
 ### Command Trigger
 
-The command trigger works for computation-only workloads:
+The command trigger uses `AtomVM.wasm` (not the HTTP component) and works on
+any WASI runtime, including Spin:
 
 ```bash
 # Install Spin
@@ -339,9 +389,20 @@ when no arguments are provided.
 
 ### HTTP Trigger
 
-AtomVM implements the `wasi:http/incoming-handler` interface, enabling Erlang
-HTTP handlers to run as Spin HTTP components. See [docs/SPIN_DEMO.md](docs/SPIN_DEMO.md)
-for full details, and [http/README.md](http/README.md) for the implementation.
+AtomVM implements the `wasi:http/incoming-handler` interface, enabling
+Erlang/Elixir HTTP handlers to run as Spin HTTP components.
+
+The handler module (`SpinHandler` for Elixir, `spin_handler` for Erlang)
+exports `handle/1`, which receives a request map and returns a response map.
+Platform NIF modules (`spin_http`, `spin_kv`, `spin_config`, `spin_sqlite`,
+`spin_postgres`) provide access to Spin's APIs from Erlang/Elixir code.
+
+Build scripts are provided in `examples/erlang/wasi/build_and_run.sh` and
+`examples/elixir/wasi/build_and_run.sh`. See [docs/SPIN_DEMO.md](docs/SPIN_DEMO.md)
+for a walkthrough and [http/README.md](http/README.md) for implementation details.
+
+See [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md) for performance benchmarks
+and optimization opportunities.
 
 ## Elixir on WASI
 
@@ -380,7 +441,8 @@ src/platforms/wasi/
 ├── cmake/
 │   └── wasi-sdk.cmake              # CMake toolchain file for wasi-sdk (wasm32-wasip2)
 ├── docs/
-│   └── SPIN_DEMO.md                # Fermyon Spin status and guide
+│   ├── SPIN_DEMO.md                # Fermyon Spin status and guide
+│   └── FUTURE_WORK.md              # Performance benchmarks and optimization plan
 ├── http/                           # HTTP component for Spin (wasi:http)
 │   ├── main_http.c                 # Reactor-mode entry point
 │   ├── wasi_http_handler.c/h       # Incoming HTTP request handler
@@ -409,7 +471,10 @@ src/platforms/wasi/
 
 examples/
 ├── erlang/wasi/                    # Erlang WASI examples (hello, spin)
-└── elixir/wasi/                    # Elixir WASI examples (demos, spin)
+│   └── build_and_run.sh            # Build script for Erlang HTTP handler
+├── elixir/wasi/                    # Elixir WASI examples (demos, spin)
+│   └── build_and_run.sh            # Build script for Elixir HTTP handler
+└── benchmarks/                     # Performance benchmarks (AtomVM vs Rust)
 ```
 
 ## Design notes
@@ -443,7 +508,10 @@ To extend WASI platform support:
 
 1. **Better socket error handling**: Map WASI-specific errors properly
 2. **Elixir stdlib**: Bundle Elixir standard library for full Elixir support
-3. **Component model**: Export AtomVM as a component with custom interfaces
+3. **Wasmtime-compatible HTTP build**: Create a WIT world without Spin imports
+   (see "Making it work with other runtimes" above)
+4. **Pre-initialization snapshots**: Reduce per-request overhead by snapshotting
+   the VM after init (see [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md))
 
 ## References
 
