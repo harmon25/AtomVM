@@ -12,7 +12,7 @@ defmodule SimpleDemo do
     doubled = Enum.map(numbers, fn x -> x * 2 end)
     IO.puts("Doubled: #{inspect(doubled)}")
 
-    sum = Enum.sum(numbers)
+    sum = :lists.foldl(fn x, acc -> x + acc end, 0, numbers)
     IO.puts("Sum: #{sum}")
     IO.puts("")
 
@@ -22,24 +22,15 @@ defmodule SimpleDemo do
     IO.puts("Name: #{user.name}, Age: #{user.age}")
     IO.puts("")
 
-    # String operations
-    text = "Hello WASI World"
-    IO.puts("Text: #{text}")
-    IO.puts("Upper: #{String.upcase(text)}")
-    IO.puts("Length: #{String.length(text)}")
-    IO.puts("")
-
     # Recursion
     result = factorial(5)
     IO.puts("5! = #{result}")
     IO.puts("")
 
-    # Pipe operator
-    result2 =
-      [1, 2, 3, 4, 5]
-      |> Enum.filter(fn x -> rem(x, 2) == 0 end)
-      |> Enum.map(fn x -> x * x end)
-      |> Enum.sum()
+    # Chained operations (note: cannot pipe into :lists.foldl due to argument order)
+    evens = Enum.filter([1, 2, 3, 4, 5], fn x -> rem(x, 2) == 0 end)
+    squares = Enum.map(evens, fn x -> x * x end)
+    result2 = :lists.foldl(fn x, acc -> x + acc end, 0, squares)
 
     IO.puts("Sum of squares of evens: #{result2}")
     IO.puts("")
