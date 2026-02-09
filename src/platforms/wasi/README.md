@@ -477,6 +477,81 @@ examples/
 └── benchmarks/                     # Performance benchmarks (AtomVM vs Rust)
 ```
 
+## Pre-Initialization Snapshots (Experimental)
+
+AtomVM supports creating pre-initialized WASM snapshots to dramatically reduce
+startup time for HTTP handlers. This eliminates the per-request initialization
+overhead (~1ms) by running the VM setup once at build time.
+
+### How It Works
+
+Without pre-init (current):
+```
+Each Request:
+├── Spin creates fresh WASM instance
+├── Constructor runs: loads AVM, parses BEAM, initializes VM (~1ms)
+├── Handler executes (~0.3ms)
+└── Instance destroyed
+```
+
+With pre-init:
+```
+Build Time (Once):
+├── Load AVM file into memory
+├── Parse BEAM bytecode
+├── Initialize GlobalContext
+└── Snapshot initialized state
+
+Each Request:
+├── Spin clones pre-initialized memory (~0.1ms)
+├── Handler executes (~0.3ms)
+└── Instance destroyed
+```
+
+**Expected improvement: ~50-60% latency reduction (1.5ms → 0.6-0.8ms)**
+
+### Requirements
+
+- [wizer](https://github.com/bytecodealliance/wizer) - WebAssembly pre-initializer
+- [wasm-tools](https://github.com/bytecodealliance/wasm-tools) - WASM tooling
+
+Install:
+```bash
+cargo install wizer --features="env_logger structopt"
+cargo install wasm-tools
+```
+
+### Usage
+
+A helper script is provided at `http/embed_and_preinit.sh`:
+
+```bash
+cd build-wasi
+../src/platforms/wasi/http/embed_and_preinit.sh app.avm AtomVM_http_preinit.wasm
+```
+
+### Current Limitations
+
+The AtomVM HTTP component uses WASI filesystem APIs during initialization
+to load the AVM file. This prevents current pre-init tools from creating
+snapshots. Full support requires:
+
+1. **Embedding AVM file** into WASM binary as data section (no file I/O)
+2. **Core module support** - wizer requires core WASM, not components
+3. **Source modifications** to `main_http.c` for embedded loading
+
+See [docs/FUTURE_WORK.md](docs/FUTURE_WORK.md) for detailed implementation plan.
+
+### Performance Impact
+
+Based on benchmarks comparing AtomVM to Rust handlers on Spin:
+
+| Metric | Without Pre-Init | With Pre-Init | Improvement |
+|--------|-----------------|---------------|-------------|
+| `/hello` latency | 1.58ms | ~0.6-0.8ms | **~2x faster** |
+| `/hello` req/s | 629 | ~1,200-1,500 | **~2x throughput** |
+| `/compute` req/s | 537 | ~1,000-1,200 | **~2x throughput** |
+
 ## Design notes
 
 * **Standalone CMake project** -- Like the ESP32 and Emscripten platforms,

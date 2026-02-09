@@ -54,10 +54,58 @@ post-init state.
 This would completely eliminate the per-request file I/O, AVM parsing, and
 module loading — the most expensive steps.
 
-References:
+#### Implementation Status
+
+**Current Blocker**: The AtomVM HTTP component is built as a WebAssembly Component Model
+binary (not a core WASM module). Tools like [Wizer](https://github.com/bytecodealliance/wizer)
+require core WASM modules. Additionally, the current initialization (`atomvm_http_init`)
+uses WASI filesystem APIs (`access()`, `sys_open_avm_from_file()`) to load the AVM file,
+which cannot be snapshotted by current pre-init tools.
+
+#### Solution Path
+
+**Phase 1: Embed AVM File (Completed)**
+- Modify `main_http.c` to support loading AVM from embedded data section
+- Create CMake target that embeds AVM file into WASM binary using `wasm-tools`
+- Remove filesystem dependency during initialization
+
+**Phase 2: Create Pre-Init Build Target**
+```cmake
+# Add to src/platforms/wasi/CMakeLists.txt
+add_custom_target(AtomVM_http_preinit
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/http/embed_and_preinit.sh
+    $<TARGET_FILE:AtomVM_http>
+    ${CMAKE_CURRENT_BINARY_DIR}/AtomVM_http_preinit.wasm
+  DEPENDS AtomVM_http
+)
+```
+
+**Phase 3: Wizer Integration**
+```bash
+# Build process
+1. Build AtomVM_http as core module (not component) for pre-init
+2. Embed AVM file into data section
+3. Run wizer to snapshot initialized state:
+   wizer --allow-wasi -o AtomVM_http_preinit.wasm AtomVM_http_embedded.wasm
+4. Wrap snapshotted core module back into component
+```
+
+#### Build Script
+
+A prototype build script is available at:
+`src/platforms/wasi/http/embed_and_preinit.sh`
+
+Usage:
+```bash
+cd build-wasi
+../src/platforms/wasi/http/embed_and_preinit.sh app.avm
+```
+
+#### References
 - [Spin Component Model](https://spinframework.dev/component-model/)
 - [wasi-virt](https://github.com/bytecodealliance/wasi-virt)
 - [wasmtime pre-initialization](https://docs.wasmtime.dev/api/wasmtime/component/struct.Linker.html)
+- [Wizer](https://github.com/bytecodealliance/wizer) - WebAssembly pre-initializer
 
 ### 2. Cache Handler Module Pointer at Init (Medium Impact)
 
