@@ -434,7 +434,7 @@ size_t intn_divu(const intn_digit_t m[], size_t m_len, const intn_digit_t n[], s
     return padded_q_len / UINT16_IN_A_DIGIT;
 }
 
-int intn_cmp(const intn_digit_t a[], size_t a_len, const intn_digit_t b[], size_t b_len)
+int intn_cmpu(const intn_digit_t a[], size_t a_len, const intn_digit_t b[], size_t b_len)
 {
     size_t normal_a_len = intn_count_digits(a, a_len);
     size_t normal_b_len = intn_count_digits(b, b_len);
@@ -456,6 +456,18 @@ int intn_cmp(const intn_digit_t a[], size_t a_len, const intn_digit_t b[], size_
     }
 
     return 0;
+}
+
+int intn_cmp(const intn_digit_t a[], size_t a_len, intn_integer_sign_t a_sign,
+    const intn_digit_t b[], size_t b_len, intn_integer_sign_t b_sign)
+{
+    if (a_sign != b_sign) {
+        return (a_sign == IntNNegativeInteger) ? -1 : 1;
+    }
+
+    int cmp = intn_cmpu(a, a_len, b, b_len);
+
+    return (a_sign == IntNNegativeInteger) ? -cmp : cmp;
 }
 
 size_t intn_addu(
@@ -515,7 +527,7 @@ size_t intn_add(const intn_digit_t m[], size_t m_len, intn_integer_sign_t m_sign
     }
     // Case 2: Different signs - subtract smaller from larger
     else {
-        int cmp = intn_cmp(m, m_len, n, n_len);
+        int cmp = intn_cmpu(m, m_len, n, n_len);
         if (cmp >= 0) {
             // |m| >= |n|, result takes sign of m
             *out_sign = m_sign;
@@ -1260,27 +1272,14 @@ int intn_to_integer_bytes(const intn_digit_t in[], size_t in_len, intn_integer_s
     }
     size_t copied_len = k;
 
-    bool negate = false;
-    if ((opts & IntnSigned) && (in_sign == IntNNegativeInteger)) {
-        negate = true;
-    }
-
     uint8_t filler = 0x00;
-    if (negate) {
+    if (in_sign == IntNNegativeInteger) {
         filler = 0xFF;
         unsigned int carry = 1;
         for (size_t i = 0; i < copied_len; i++) {
-            unsigned int temp = ((int) (~out[i])) + carry;
+            unsigned int temp = ((uint8_t) (~out[i])) + carry;
             out[i] = temp & 0xFF;
             carry = temp >> 8;
-        }
-    }
-
-    if ((opts & IntnSigned) && (copied_len == out_len)) {
-        uint8_t last_byte = out[copied_len - 1];
-        if (UNLIKELY(
-                (negate && ((last_byte & 0x80) == 0)) || (!negate && ((last_byte & 0x80) != 0)))) {
-            return -1;
         }
     }
 

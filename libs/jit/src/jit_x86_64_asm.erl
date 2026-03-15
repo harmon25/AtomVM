@@ -35,6 +35,8 @@
     jnz_rel8/1,
     jge/1,
     jge_rel8/1,
+    jle/1,
+    jle_rel8/1,
     jmp/1,
     jmp_rel8/1,
     jmp_rel32/1,
@@ -276,6 +278,11 @@ movabsq(Imm, Reg) when is_atom(Reg) ->
         {1, Index} -> <<16#49, (16#B8 + Index), Imm:64/little>>
     end.
 
+movl(Imm, DestReg) when is_integer(Imm), is_atom(DestReg) ->
+    case x86_64_x_reg(DestReg) of
+        {0, Index} -> <<(16#B8 + Index), Imm:32/little>>;
+        {1, Index} -> <<16#41, (16#B8 + Index), Imm:32/little>>
+    end;
 movl({0, SrcReg}, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(SrcReg),
     {REX_R, MODRM_REG} = x86_64_x_reg(DestReg),
@@ -359,6 +366,14 @@ jge(Offset) when Offset >= -126 andalso Offset =< 129 ->
 
 jge_rel8(Offset) when Offset >= -126 andalso Offset =< 129 ->
     {1, jge(Offset)}.
+
+jle(Offset) when Offset >= -126 andalso Offset =< 129 ->
+    % Use short jump (matches assembler behavior)
+    AdjustedOffset = Offset - 2,
+    <<16#7E, AdjustedOffset>>.
+
+jle_rel8(Offset) when Offset >= -126 andalso Offset =< 129 ->
+    {1, jle(Offset)}.
 
 jmp(Offset) when Offset >= -126 andalso Offset =< 129 ->
     % Use short jump (matches assembler behavior)
@@ -483,6 +498,17 @@ addq(SrcReg, DestReg) when is_atom(SrcReg), is_atom(DestReg) ->
     {REX_B, MODRM_RM} = x86_64_x_reg(DestReg),
     <<?X86_64_REX(1, REX_R, 0, REX_B), 16#01, 3:2, MODRM_REG:3, MODRM_RM:3>>.
 
+subq(Imm, Reg) when ?IS_SINT8_T(Imm), is_atom(Reg) ->
+    case x86_64_x_reg(Reg) of
+        {0, Index} -> <<16#48, 16#83, (16#E8 + Index), Imm>>;
+        {1, Index} -> <<16#49, 16#83, (16#E8 + Index), Imm>>
+    end;
+subq(Imm, rax) when ?IS_SINT32_T(Imm) ->
+    % Special short encoding for sub imm32, %rax
+    <<16#48, 16#2D, Imm:32/little>>;
+subq(Imm, Reg) when ?IS_SINT32_T(Imm), is_atom(Reg) ->
+    {REX_B, MODRM_RM} = x86_64_x_reg(Reg),
+    <<?X86_64_REX(1, 0, 0, REX_B), 16#81, 3:2, 5:3, MODRM_RM:3, Imm:32/little>>;
 subq(RegA, RegB) when is_atom(RegA), is_atom(RegB) ->
     {REX_R, MODRM_REG} = x86_64_x_reg(RegA),
     {REX_B, MODRM_RM} = x86_64_x_reg(RegB),

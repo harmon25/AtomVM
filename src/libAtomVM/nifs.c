@@ -43,7 +43,7 @@
 #include "dist_nifs.h"
 #include "erl_nif_priv.h"
 #include "ets.h"
-#include "externalterm.h"
+#include "external_term.h"
 #include "globalcontext.h"
 #include "interop.h"
 #include "intn.h"
@@ -69,10 +69,66 @@
 
 #define FLOAT_BUF_SIZE 64
 
-#define RAISE(a, b)  \
-    ctx->x[0] = (a); \
-    ctx->x[1] = (b); \
-    return term_invalid_term();
+#define RAISE(a, b)                               \
+    do {                                          \
+        term _tmp_a = (a);                        \
+        term _tmp_b = (b);                        \
+        context_set_exception_class(ctx, _tmp_a); \
+        ctx->exception_reason = _tmp_b;           \
+        return term_invalid_term();               \
+    } while (0)
+
+#define RAISE_WITH_STACKTRACE(a, b, c)            \
+    do {                                          \
+        term _tmp_a = (a);                        \
+        term _tmp_b = (b);                        \
+        term _tmp_c = (c);                        \
+        context_set_exception_class(ctx, _tmp_a); \
+        ctx->exception_reason = _tmp_b;           \
+        ctx->exception_stacktrace = _tmp_c;       \
+        return term_invalid_term();               \
+    } while (0)
+
+/**
+ * @brief Validate a NIF argument and raise badarg error if validation fails.
+ *
+ * This macro validates an argument from the argv array using a provided verification function.
+ * If validation fails, it raises a badarg error and tells the VM that function arguments
+ * can be added to the stacktrace.
+ *
+ * IMPORTANT: Because this macro sets the EXCEPTION_USE_LIVE_REGS_FLAG, all NIF parameters
+ * (argv) must contain valid terms when this macro is used. Therefore:
+ * - Use this macro BEFORE any garbage collection operations, OR
+ * - Ensure all arguments (argv) have been used as GC roots if GC has occurred
+ *
+ * @param out Variable to receive the validated argument value (must be a term lvalue)
+ * @param index Index into the argv array (0-based) to validate
+ * @param verify_function Validation function that takes a term and returns bool
+ *                        (e.g., term_is_any_integer, term_is_binary, term_is_list)
+ *
+ * Implicit parameters (must be in scope):
+ * @param argv The NIF arguments array (term argv[])
+ * @param ctx The execution context (Context *ctx)
+ *
+ * @note On validation failure, this macro:
+ *       - Sets exception class to ERROR_ATOM with EXCEPTION_USE_LIVE_REGS_FLAG
+ *       - Sets exception reason to BADARG_ATOM
+ *       - Returns term_invalid_term() immediately
+ *
+ * @note The EXCEPTION_USE_LIVE_REGS_FLAG tells the stacktrace builder that x registers
+ *       (which contain the function arguments) are valid and should be included in the
+ *       stacktrace for better error reporting.
+ */
+#define VALIDATE_ARG(out, index, verify_function)                       \
+    do {                                                                \
+        term _tmp_var = argv[index];                                    \
+        if (UNLIKELY(!verify_function(_tmp_var))) {                     \
+            context_set_exception_class_use_live_flag(ctx, ERROR_ATOM); \
+            ctx->exception_reason = BADARG_ATOM;                        \
+            return term_invalid_term();                                 \
+        }                                                               \
+        out = _tmp_var;                                                 \
+    } while (0)
 
 #ifndef MAX
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
@@ -102,6 +158,7 @@ static term nif_binary_part_3(Context *ctx, int argc, term argv[]);
 static term nif_binary_split(Context *ctx, int argc, term argv[]);
 static term nif_binary_replace(Context *ctx, int argc, term argv[]);
 static term nif_binary_match(Context *ctx, int argc, term argv[]);
+static term nif_binary_longest_common_prefix_1(Context *ctx, int argc, term argv[]);
 static term nif_calendar_system_time_to_universal_time_2(Context *ctx, int argc, term argv[]);
 static term nif_os_getenv_1(Context *ctx, int argc, term argv[]);
 static term nif_erlang_delete_element_2(Context *ctx, int argc, term argv[]);
@@ -205,6 +262,7 @@ static term nif_code_server_code_chunk(Context *ctx, int argc, term argv[]);
 static term nif_code_server_atom_resolver(Context *ctx, int argc, term argv[]);
 static term nif_code_server_literal_resolver(Context *ctx, int argc, term argv[]);
 static term nif_code_server_type_resolver(Context *ctx, int argc, term argv[]);
+static term nif_code_server_import_resolver(Context *ctx, int argc, term argv[]);
 static term nif_code_server_set_native_code(Context *ctx, int argc, term argv[]);
 #endif
 static term nif_erlang_module_loaded(Context *ctx, int argc, term argv[]);
@@ -289,6 +347,11 @@ static const struct Nif binary_replace_nif = {
 static const struct Nif binary_match_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_binary_match
+};
+
+static const struct Nif binary_longest_common_prefix_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_binary_longest_common_prefix_1
 };
 
 static const struct Nif make_ref_nif = {
@@ -776,6 +839,10 @@ static const struct Nif code_server_literal_resolver_nif = {
 static const struct Nif code_server_type_resolver_nif = {
     .base.type = NIFFunctionType,
     .nif_ptr = nif_code_server_type_resolver
+};
+static const struct Nif code_server_import_resolver_nif = {
+    .base.type = NIFFunctionType,
+    .nif_ptr = nif_code_server_import_resolver
 };
 static const struct Nif code_server_set_native_code_nif = {
     .base.type = NIFFunctionType,
@@ -1651,19 +1718,28 @@ term nif_erlang_make_ref_0(Context *ctx, int argc, term argv[])
 term nif_erlang_monotonic_time_1(Context *ctx, int argc, term argv[])
 {
     UNUSED(ctx);
-    UNUSED(argc);
+
+    term unit;
+    if (argc == 0) {
+        unit = NATIVE_ATOM;
+    } else {
+        unit = argv[0];
+    }
 
     struct timespec ts;
     sys_monotonic_time(&ts);
 
-    if (argv[0] == SECOND_ATOM) {
+    if (unit == SECOND_ATOM) {
         return make_maybe_boxed_int64(ctx, ts.tv_sec);
 
-    } else if (argv[0] == MILLISECOND_ATOM) {
+    } else if (unit == MILLISECOND_ATOM) {
         return make_maybe_boxed_int64(ctx, ((int64_t) ts.tv_sec) * 1000UL + ts.tv_nsec / 1000000UL);
 
-    } else if (argv[0] == MICROSECOND_ATOM) {
+    } else if (unit == MICROSECOND_ATOM) {
         return make_maybe_boxed_int64(ctx, ((int64_t) ts.tv_sec) * 1000000UL + ts.tv_nsec / 1000UL);
+
+    } else if (unit == NANOSECOND_ATOM || unit == NATIVE_ATOM) {
+        return make_maybe_boxed_int64(ctx, ((int64_t) ts.tv_sec) * INT64_C(1000000000) + ts.tv_nsec);
 
     } else {
         RAISE_ERROR(BADARG_ATOM);
@@ -1673,19 +1749,28 @@ term nif_erlang_monotonic_time_1(Context *ctx, int argc, term argv[])
 term nif_erlang_system_time_1(Context *ctx, int argc, term argv[])
 {
     UNUSED(ctx);
-    UNUSED(argc);
+
+    term unit;
+    if (argc == 0) {
+        unit = NATIVE_ATOM;
+    } else {
+        unit = argv[0];
+    }
 
     struct timespec ts;
     sys_time(&ts);
 
-    if (argv[0] == SECOND_ATOM) {
+    if (unit == SECOND_ATOM) {
         return make_maybe_boxed_int64(ctx, ts.tv_sec);
 
-    } else if (argv[0] == MILLISECOND_ATOM) {
+    } else if (unit == MILLISECOND_ATOM) {
         return make_maybe_boxed_int64(ctx, ((int64_t) ts.tv_sec) * 1000UL + ts.tv_nsec / 1000000UL);
 
-    } else if (argv[0] == MICROSECOND_ATOM) {
+    } else if (unit == MICROSECOND_ATOM) {
         return make_maybe_boxed_int64(ctx, ((int64_t) ts.tv_sec) * 1000000UL + ts.tv_nsec / 1000UL);
+
+    } else if (unit == NANOSECOND_ATOM || unit == NATIVE_ATOM) {
+        return make_maybe_boxed_int64(ctx, ((int64_t) ts.tv_sec) * INT64_C(1000000000) + ts.tv_nsec);
 
     } else {
         RAISE_ERROR(BADARG_ATOM);
@@ -1814,6 +1899,10 @@ term nif_calendar_system_time_to_universal_time_2(Context *ctx, int argc, term a
     } else if (argv[1] == MICROSECOND_ATOM) {
         ts.tv_sec = (time_t) (value / 1000000);
         ts.tv_nsec = (value % 1000000) * 1000;
+
+    } else if (argv[1] == NANOSECOND_ATOM || argv[1] == NATIVE_ATOM) {
+        ts.tv_sec = (time_t) (value / INT64_C(1000000000));
+        ts.tv_nsec = value % INT64_C(1000000000);
 
     } else {
         RAISE_ERROR(BADARG_ATOM);
@@ -2370,9 +2459,9 @@ static term integer_to_buf(Context *ctx, int argc, term argv[], char *tmp_buf, s
 {
     *needs_cleanup = false;
 
-    term value = argv[0];
+    term value;
+    VALIDATE_ARG(value, 0, term_is_any_integer);
     avm_int_t base = 10;
-    VALIDATE_VALUE(value, term_is_any_integer);
     if (argc > 1) {
         VALIDATE_VALUE(argv[1], term_is_integer);
         base = term_to_int(argv[1]);
@@ -2929,6 +3018,7 @@ static term nif_erlang_process_info(Context *ctx, int argc, term argv[])
     term ret = term_invalid_term();
     if (ctx == target) {
         size_t term_size;
+        // NOLINT(allocations-without-ensure-free) called with NULL heap, only computes size
         if (UNLIKELY(!context_get_process_info(ctx, NULL, &term_size, item, NULL))) {
             globalcontext_get_process_unlock(ctx->global, target);
             RAISE_ERROR(BADARG_ATOM);
@@ -2992,7 +3082,11 @@ static term nif_erlang_system_info(Context *ctx, int argc, term argv[])
         return term_from_literal_binary((const uint8_t *) buf, len, &ctx->heap, ctx->global);
     }
     if (key == ATOMVM_VERSION_ATOM) {
-        return term_from_literal_binary((const uint8_t *) ATOMVM_VERSION, strlen(ATOMVM_VERSION), &ctx->heap, ctx->global);
+        size_t len = strlen(ATOMVM_VERSION);
+        if (memory_ensure_free_opt(ctx, term_binary_heap_size(len), MEMORY_CAN_SHRINK) != MEMORY_GC_OK) {
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+        }
+        return term_from_literal_binary((const uint8_t *) ATOMVM_VERSION, len, &ctx->heap, ctx->global);
     }
     if (key == SYSTEM_VERSION_ATOM) {
         char system_version[256];
@@ -3068,9 +3162,7 @@ static term nif_erlang_system_flag(Context *ctx, int argc, term argv[])
         int new_value = term_to_int(value);
         int nb_processors = smp_get_online_processors();
         if (UNLIKELY(new_value < 1) || UNLIKELY(new_value > nb_processors)) {
-            argv[0] = ERROR_ATOM;
-            argv[1] = BADARG_ATOM;
-            return term_invalid_term();
+            RAISE_ERROR(BADARG_ATOM);
         }
         while (!ATOMIC_COMPARE_EXCHANGE_WEAK_INT(&ctx->global->online_schedulers, &old_value, new_value)) {
         };
@@ -3084,9 +3176,6 @@ static term nif_erlang_system_flag(Context *ctx, int argc, term argv[])
 
 static term nif_erlang_binary_to_term(Context *ctx, int argc, term argv[])
 {
-    if (argc < 1 || 2 < argc) {
-        RAISE_ERROR(BADARG_ATOM);
-    }
     if (argc == 2 && !term_is_list(argv[1])) {
         RAISE_ERROR(BADARG_ATOM);
     }
@@ -3099,15 +3188,33 @@ static term nif_erlang_binary_to_term(Context *ctx, int argc, term argv[])
         && interop_proplist_get_value_default(argv[1], USED_ATOM, FALSE_ATOM) == TRUE_ATOM) {
         return_used = 1;
     }
-    size_t bytes_read = 0;
-    term dst = externalterm_from_binary(ctx, binary, &bytes_read);
-    if (UNLIKELY(term_is_invalid_term(dst))) {
-        RAISE_ERROR(BADARG_ATOM)
+
+    GlobalContext *glb = ctx->global;
+
+    size_t required_heap;
+    size_t bytes_read;
+    external_term_read_result_t res = external_term_validate_buf(term_binary_data(binary),
+        term_binary_size(binary), ExternalTermReadNoOpts, &required_heap, &bytes_read, glb);
+    if (UNLIKELY(res != ExternalTermReadOk)) {
+        RAISE_ERROR(BADARG_ATOM);
     }
+
     if (return_used) {
-        if (UNLIKELY(memory_ensure_free_with_roots(ctx, TUPLE_SIZE(2), 1, &dst, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-        }
+        required_heap += TUPLE_SIZE(2);
+    }
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, required_heap, 1, &binary, MEMORY_CAN_SHRINK)
+            != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    term dst;
+    res = external_term_deserialize_buf(term_binary_data(binary), term_binary_size(binary),
+        ExternalTermReadNoOpts, &ctx->heap, &dst, glb);
+    if (UNLIKELY(res != ExternalTermReadOk)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    if (return_used) {
         term ret = term_alloc_tuple(2, &ctx->heap);
         term_put_tuple_element(ret, 0, dst);
         term_put_tuple_element(ret, 1, term_from_int(bytes_read));
@@ -3121,7 +3228,7 @@ static term nif_erlang_term_to_binary(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
     term t = argv[0];
-    term ret = externalterm_to_binary(ctx, t);
+    term ret = external_term_to_binary(ctx, t);
     if (term_is_invalid_term(ret)) {
         RAISE_ERROR(BADARG_ATOM);
     }
@@ -3611,29 +3718,60 @@ static term nif_binary_match(Context *ctx, int argc, term argv[])
     return result_tuple;
 }
 
+static term nif_binary_longest_common_prefix_1(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+
+    term list = argv[0];
+    VALIDATE_VALUE(list, term_is_nonempty_list);
+
+    term first_term = term_get_list_head(list);
+    VALIDATE_VALUE(first_term, term_is_binary);
+
+    size_t prefix_len = term_binary_size(first_term);
+    const uint8_t *first_data = (const uint8_t *) term_binary_data(first_term);
+
+    term rest = term_get_list_tail(list);
+    while (term_is_nonempty_list(rest)) {
+        term bin_term = term_get_list_head(rest);
+        VALIDATE_VALUE(bin_term, term_is_binary);
+
+        size_t bin_size = term_binary_size(bin_term);
+        const uint8_t *bin_data = (const uint8_t *) term_binary_data(bin_term);
+        size_t max_common = (bin_size < prefix_len) ? bin_size : prefix_len;
+
+        size_t common = 0;
+        while (common < max_common && first_data[common] == bin_data[common]) {
+            common++;
+        }
+        prefix_len = common;
+
+        rest = term_get_list_tail(rest);
+    }
+
+    VALIDATE_VALUE(rest, term_is_nil);
+
+    return term_from_int(prefix_len);
+}
+
 static term nif_erlang_throw(Context *ctx, int argc, term argv[])
 {
     UNUSED(argc);
 
-    term t = argv[0];
-
-    ctx->x[0] = THROW_ATOM;
-    ctx->x[1] = t;
-    return term_invalid_term();
+    RAISE(THROW_ATOM, argv[0]);
 }
 
 static term nif_erlang_raise(Context *ctx, int argc, term argv[])
 {
-    UNUSED(argc);
-
     term ex_class = argv[0];
     if (UNLIKELY(ex_class != ERROR_ATOM && ex_class != LOWERCASE_EXIT_ATOM && ex_class != THROW_ATOM)) {
         return BADARG_ATOM;
     }
-    ctx->x[0] = ex_class;
-    ctx->x[1] = argv[1];
-    ctx->x[2] = term_nil();
-    return term_invalid_term();
+    if (argc == 2) {
+        RAISE(ex_class, argv[1]);
+    } else {
+        RAISE_WITH_STACKTRACE(ex_class, argv[1], argv[2]);
+    }
 }
 
 static term nif_ets_new(Context *ctx, int argc, term argv[])
@@ -3907,11 +4045,6 @@ static term nif_erlang_fun_to_list(Context *ctx, int argc, term argv[])
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
-    if (UNLIKELY(memory_ensure_free_opt(ctx, str_len * 2, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
-        free(buf);
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
-
     // it looks like unicode is not supported right now for module names but it looks like a
     // compiler limitation rather than a BEAM limitation, so let's assume that one day they might
     // be unicode.
@@ -4027,7 +4160,7 @@ static term nif_erlang_exit(Context *ctx, int argc, term argv[])
                 self_is_signaled = target == ctx;
             } else {
                 if (target->trap_exit) {
-                    if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(3)) != MEMORY_GC_OK)) {
+                    if (UNLIKELY(memory_ensure_free_with_roots(ctx, TUPLE_SIZE(3), 1, &reason, MEMORY_NO_SHRINK) != MEMORY_GC_OK)) {
                         globalcontext_get_process_unlock(glb, target);
                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                     }
@@ -4123,9 +4256,14 @@ static term nif_erlang_fun_info_2(Context *ctx, int argc, term argv[])
             RAISE_ERROR(BADARG_ATOM);
     }
 
-    if (UNLIKELY(memory_ensure_free_with_roots(ctx, TUPLE_SIZE(2), 2, (term[]){ key, value }, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+    term roots[2] = { key, value };
+    if (UNLIKELY(memory_ensure_free_with_roots(ctx, TUPLE_SIZE(2), 2, roots, MEMORY_CAN_SHRINK)
+            != MEMORY_GC_OK)) {
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
+    key = roots[0];
+    value = roots[1];
+
     term fun_info_tuple = term_alloc_tuple(2, &ctx->heap);
     term_put_tuple_element(fun_info_tuple, 0, key);
     term_put_tuple_element(fun_info_tuple, 1, value);
@@ -4974,21 +5112,47 @@ static term nif_console_print(Context *ctx, int argc, term argv[])
 }
 
 // clang-format off
-static char b64_table[64] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J',
-                             'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
-                             'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd',
-                             'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
-                             'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x',
-                             'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7',
-                             '8', '9', '+', '/'};
+static const char b64_table[64] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J',
+                                   'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
+                                   'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd',
+                                   'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+                                   'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x',
+                                   'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7',
+                                   '8', '9', '+', '/'};
+
+static const char b64_table_urlsafe[64] = {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J',
+                                           'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
+                                           'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd',
+                                           'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n',
+                                           'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x',
+                                           'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7',
+                                           '8', '9', '-', '_'};
 // clang-format on
 
 // per https://tools.ietf.org/rfc/rfc4648.txt
 
+// Support for iolists is an AtomVM extension;
+// the original base64 implementation accepts only byte lists
+// TODO: Evaluate whether this extension is worthwhile
 static term base64_encode(Context *ctx, int argc, term argv[], bool return_binary)
 {
-    UNUSED(argc);
     term src = argv[0];
+
+    bool emit_padding = true;
+    bool urlsafe = false;
+    if (argc == 2) {
+        term opts = argv[1];
+        if (UNLIKELY(!term_is_map(opts))) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
+        term padding_val = interop_kv_get_value_default(
+            opts, ATOM_STR("\x7", "padding"), TRUE_ATOM, ctx->global);
+        emit_padding = (padding_val != FALSE_ATOM);
+        term mode_val = interop_kv_get_value_default(
+            opts, ATOM_STR("\x4", "mode"), UNDEFINED_ATOM, ctx->global);
+        urlsafe = globalcontext_is_term_equal_to_atom_string(
+            ctx->global, mode_val, ATOM_STR("\x7", "urlsafe"));
+    }
 
     size_t src_size;
     uint8_t *src_pos = NULL, *src_buf = NULL;
@@ -5048,10 +5212,12 @@ static term base64_encode(Context *ctx, int argc, term argv[], bool return_binar
             dst_size++;
             break;
     }
-    size_t dst_size_with_pad = dst_size + pad;
+    size_t dst_size_with_pad = emit_padding ? dst_size + pad : dst_size;
+    const char *table = urlsafe ? b64_table_urlsafe : b64_table;
     size_t heap_free = return_binary ? term_binary_heap_size(dst_size_with_pad)
                                      : 2 * dst_size_with_pad;
     if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_free, 1, &src, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        free(src_buf);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     // src may have been invalidated by GC
@@ -5075,7 +5241,7 @@ static term base64_encode(Context *ctx, int argc, term argv[], bool return_binar
         uint8_t accum = 0;
         switch (i & 0x03) {
             case 0:
-                dst_pos[i] = b64_table[(*src_pos) >> 2];
+                dst_pos[i] = table[(*src_pos) >> 2];
                 break;
             case 1:
                 accum = ((*src_pos) & 0x03) << 4;
@@ -5083,7 +5249,7 @@ static term base64_encode(Context *ctx, int argc, term argv[], bool return_binar
                 if (i < dst_size - 1) {
                     accum |= ((*src_pos) & 0xF0) >> 4;
                 }
-                dst_pos[i] = b64_table[accum];
+                dst_pos[i] = table[accum];
                 break;
             case 2:
                 accum = ((*src_pos) & 0x0F) << 2;
@@ -5091,17 +5257,19 @@ static term base64_encode(Context *ctx, int argc, term argv[], bool return_binar
                 if (i < dst_size - 1) {
                     accum |= ((*src_pos) & 0xC0) >> 6;
                 }
-                dst_pos[i] = b64_table[accum];
+                dst_pos[i] = table[accum];
                 break;
             case 3:
-                dst_pos[i] = b64_table[(*src_pos) & 0x3F];
+                dst_pos[i] = table[(*src_pos) & 0x3F];
                 src_pos++;
                 break;
         }
     }
     free(src_buf);
-    for (size_t i = 0; i < pad; ++i) {
-        dst_pos[dst_size + i] = '=';
+    if (emit_padding) {
+        for (size_t i = 0; i < pad; ++i) {
+            dst_pos[dst_size + i] = '=';
+        }
     }
     if (!return_binary) {
         dst = term_from_string(dst_pos, dst_size_with_pad, &ctx->heap);
@@ -5127,10 +5295,46 @@ static inline uint8_t find_index(uint8_t c)
     }
 }
 
+// RFC 4648 Section 5: URL and filename safe alphabet ('-' and '_' replace '+' and '/')
+static inline uint8_t find_index_urlsafe(uint8_t c)
+{
+    if ('A' <= c && c <= 'Z') {
+        return c - 'A';
+    } else if ('a' <= c && c <= 'z') {
+        return 26 + (c - 'a');
+    } else if ('0' <= c && c <= '9') {
+        return 52 + (c - '0');
+    } else if (c == '-') {
+        return 62;
+    } else if (c == '_') {
+        return 63;
+    } else {
+        return NOT_FOUND;
+    }
+}
+
+// Support for iolists is an AtomVM extension;
+// the original base64 implementation accepts only byte lists
+// TODO: Evaluate whether this extension is worthwhile
 static term base64_decode(Context *ctx, int argc, term argv[], bool return_binary)
 {
-    UNUSED(argc);
     term src = argv[0];
+
+    bool require_padding = true;
+    bool urlsafe = false;
+    if (argc == 2) {
+        term opts = argv[1];
+        if (UNLIKELY(!term_is_map(opts))) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
+        term padding_val = interop_kv_get_value_default(
+            opts, ATOM_STR("\x7", "padding"), TRUE_ATOM, ctx->global);
+        require_padding = (padding_val != FALSE_ATOM);
+        term mode_val = interop_kv_get_value_default(
+            opts, ATOM_STR("\x4", "mode"), UNDEFINED_ATOM, ctx->global);
+        urlsafe = globalcontext_is_term_equal_to_atom_string(
+            ctx->global, mode_val, ATOM_STR("\x7", "urlsafe"));
+    }
 
     size_t src_size;
     uint8_t *src_pos, *src_buf = NULL;
@@ -5139,8 +5343,12 @@ static term base64_decode(Context *ctx, int argc, term argv[], bool return_binar
         if (src_size == 0) {
             return return_binary ? src : term_nil();
         }
-        // for now, we only accept valid encodings (no whitespace)
-        if (src_size % 4 != 0) {
+        // length % 4 == 1 is never valid base64 (padded or unpadded)
+        if (src_size % 4 == 1) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
+        // without padding option, input must be a multiple of 4
+        if (require_padding && src_size % 4 != 0) {
             RAISE_ERROR(BADARG_ATOM);
         }
         src_pos = (uint8_t *) term_binary_data(src);
@@ -5163,8 +5371,12 @@ static term base64_decode(Context *ctx, int argc, term argv[], bool return_binar
                 return term_nil();
             }
         }
-        // for now, we only accept valid encodings (no whitespace)
-        if (src_size % 4 != 0) {
+        // length % 4 == 1 is never valid base64 (padded or unpadded)
+        if (src_size % 4 == 1) {
+            RAISE_ERROR(BADARG_ATOM);
+        }
+        // without padding option, input must be a multiple of 4
+        if (require_padding && src_size % 4 != 0) {
             RAISE_ERROR(BADARG_ATOM);
         }
         src_buf = malloc(src_size);
@@ -5186,19 +5398,22 @@ static term base64_decode(Context *ctx, int argc, term argv[], bool return_binar
         RAISE_ERROR(BADARG_ATOM);
     }
 
-    size_t dst_size = (3 * src_size) / 4;
-    size_t pad = 0;
+    // count explicit '=' padding characters at the end of the input
+    size_t explicit_pad = 0;
     if (src_pos[src_size - 1] == '=') {
-        if (src_pos[src_size - 2] == '=') {
-            pad = 2;
-        } else {
-            pad = 1;
-        }
+        explicit_pad = (src_pos[src_size - 2] == '=') ? 2 : 1;
     }
-    dst_size -= pad;
+    // total logical padding: explicit '=' chars, or inferred from unpadded length
+    size_t pad = explicit_pad;
+    if (pad == 0 && src_size % 4 != 0) {
+        pad = 4 - (src_size % 4);
+    }
+    // decoded size: round up to the next group of 4, decode 3 bytes per group, subtract pad
+    size_t dst_size = ((src_size + 3) / 4) * 3 - pad;
     size_t heap_free = return_binary ? term_binary_heap_size(dst_size)
                                      : 2 * dst_size;
     if (UNLIKELY(memory_ensure_free_with_roots(ctx, heap_free, 1, &src, MEMORY_CAN_SHRINK) != MEMORY_GC_OK)) {
+        free(src_buf);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     term dst = term_invalid_term();
@@ -5217,9 +5432,10 @@ static term base64_decode(Context *ctx, int argc, term argv[], bool return_binar
     if (term_is_binary(src)) {
         src_pos = (uint8_t *) term_binary_data(src);
     }
-    size_t n = src_size - pad;
+    // iterate over real (non-'=') source characters only
+    size_t n = src_size - explicit_pad;
     for (size_t i = 0; i < n; ++i) {
-        uint8_t octet = find_index(src_pos[i]);
+        uint8_t octet = urlsafe ? find_index_urlsafe(src_pos[i]) : find_index(src_pos[i]);
         if (octet == NOT_FOUND) {
             free(src_buf);
             free(dst_buf);
@@ -5384,8 +5600,16 @@ static term nif_code_all_available(Context *ctx, int argc, term argv[])
     }
     synclist_unlock(&ctx->global->avmpack_data);
 
-    for (size_t ix = 0; ix < available_count - acc.acc_count; ix++) {
+    size_t loaded_count = ctx->global->loaded_modules_count;
+    size_t max_loaded = (acc.acc_count <= available_count) ? available_count - acc.acc_count : 0;
+    if (loaded_count < max_loaded) {
+        max_loaded = loaded_count;
+    }
+    for (size_t ix = 0; ix < max_loaded; ix++) {
         Module *module = globalcontext_get_module_by_index(ctx->global, ix);
+        if (IS_NULL_PTR(module)) {
+            continue;
+        }
         term module_tuple = term_alloc_tuple(3, &ctx->heap);
         term module_atom = module_get_name(module);
         atom_index_t module_atom_ix = term_to_atom_index(module_atom);
@@ -5635,8 +5859,59 @@ static term nif_code_server_type_resolver(Context *ctx, int argc, term argv[])
     if (IS_NULL_PTR(mod)) {
         RAISE_ERROR(BADARG_ATOM);
     }
+
     int type_index = term_to_int(argv[1]);
     return module_get_type_by_index(mod, type_index, ctx);
+}
+
+static term nif_code_server_import_resolver(Context *ctx, int argc, term argv[])
+{
+    UNUSED(argc);
+    VALIDATE_VALUE(argv[0], term_is_atom);
+    VALIDATE_VALUE(argv[1], term_is_integer);
+
+    term module_name = argv[0];
+    Module *mod = globalcontext_get_module(ctx->global, term_to_atom_index(module_name));
+    if (IS_NULL_PTR(mod)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+    int import_index = term_to_int(argv[1]);
+
+    // Get the imported function entry at the given index
+    if (IS_NULL_PTR(mod->imported_funcs) || import_index < 0) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    // Parse the import table to get the module, function, and arity
+    // Import table format: each entry is 12 bytes (module_atom_index, function_atom_index, arity)
+    const uint8_t *import_table = mod->import_table;
+    if (IS_NULL_PTR(import_table)) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    int functions_count = READ_32_UNALIGNED(import_table + 8);
+    if (import_index >= functions_count) {
+        RAISE_ERROR(BADARG_ATOM);
+    }
+
+    int local_module_atom_index = READ_32_UNALIGNED(import_table + import_index * 12 + 12);
+    int local_function_atom_index = READ_32_UNALIGNED(import_table + import_index * 12 + 4 + 12);
+    uint32_t arity = READ_32_UNALIGNED(import_table + import_index * 12 + 8 + 12);
+
+    term module_atom = module_get_atom_term_by_id(mod, local_module_atom_index);
+    term function_atom = module_get_atom_term_by_id(mod, local_function_atom_index);
+    term arity_term = term_from_int(arity);
+
+    if (UNLIKELY(memory_ensure_free(ctx, TUPLE_SIZE(3)) != MEMORY_GC_OK)) {
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+
+    term result = term_alloc_tuple(3, &ctx->heap);
+    term_put_tuple_element(result, 0, module_atom);
+    term_put_tuple_element(result, 1, function_atom);
+    term_put_tuple_element(result, 2, arity_term);
+
+    return result;
 }
 
 static term nif_code_server_set_native_code(Context *ctx, int argc, term argv[])
@@ -6232,6 +6507,7 @@ static term nif_lists_flatten(Context *ctx, int argc, term argv[])
                         break;
                     }
 
+                    // NOLINT(allocations-without-ensure-free) ensure_free was called when result_len > tail_len, and this path is only reached in that case
                     term *new_list_item = term_list_alloc(&ctx->heap);
                     if (prev_term) {
                         prev_term[0] = term_list_from_list_ptr(new_list_item);

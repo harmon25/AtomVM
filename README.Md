@@ -17,7 +17,7 @@ Supported Platforms
 
 * Linux, macOS, FreeBSD, DragonFly ([generic_unix](https://doc.atomvm.org/main/getting-started-guide.html#getting-started-on-the-generic-unix-platform))
 * ESP32 SoC (with IDF/FreeRTOS, see [esp32](https://doc.atomvm.org/main/getting-started-guide.html#getting-started-on-the-esp32-platform))
-* STM32 MCUs (with LibOpenCM3, see [stm32](https://doc.atomvm.org/main/getting-started-guide.html#getting-started-on-the-stm32-platform))
+* STM32 MCUs (with official ST HAL/LL SDK, see [stm32](https://doc.atomvm.org/main/getting-started-guide.html#getting-started-on-the-stm32-platform))
 * Raspberry Pi Pico and Pico 2 (see [rp2](https://doc.atomvm.org/main/getting-started-guide.html#getting-started-on-the-raspberry-pi-pico-platform))
 * Browsers and NodeJS with WebAssembly (see [emscripten](https://doc.atomvm.org/main/getting-started-guide.html#getting-started-with-atomvm-webassembly))
 
@@ -85,7 +85,7 @@ ecosystem. It can execute unmodified, compiled BEAM modules, and most
 [core standard library functions](https://doc.atomvm.org/main/api-reference-documentation.html)
 are already supported.
 
-AtomVM is tested with code compiled with any version from OTP 21 to 27 (28 is supported only in `main` branch).
+AtomVM is tested with code compiled with any version from OTP 21 to 27 (29 is supported only in `main` branch).
 
 Crashes may still occur in edge cases, so we recommend using either the
 [latest stable release](https://github.com/atomvm/AtomVM/releases)

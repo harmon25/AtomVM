@@ -30,8 +30,11 @@
     copy/1, copy/2,
     decode_hex/1,
     encode_hex/1, encode_hex/2,
+    list_to_bin/1,
+    longest_common_prefix/1,
     part/3,
     split/2, split/3,
+    match/2, match/3,
     replace/3, replace/4
 ]).
 
@@ -102,6 +105,55 @@ encode_hex(Data, uppercase) ->
     <<(integer_to_binary(B, 16)) || <<B:4>> <= Data>>;
 encode_hex(Data, lowercase) ->
     <<<<(hd(string:to_lower(integer_to_list(B, 16)))):8>> || <<B:4>> <= Data>>.
+
+%%-----------------------------------------------------------------------------
+%% @param   Binaries non-empty list of binaries
+%% @returns length of the longest common prefix of all binaries in the list
+%% @doc     Returns the length of the longest common prefix of the binaries in
+%%          the list.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec longest_common_prefix(Binaries :: [binary(), ...]) -> non_neg_integer().
+longest_common_prefix(_Binaries) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @equiv match(Binary, Pattern, [])
+%% @param   Binary  binary to search in
+%% @param   Pattern pattern to search for
+%% @returns `{Start, Length}' or `nomatch'
+%% @doc Find the first occurrence of Pattern in Binary.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec match(Binary :: binary(), Pattern :: binary() | [binary()]) ->
+    {non_neg_integer(), non_neg_integer()} | nomatch.
+match(_Binary, _Pattern) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   Binary  binary to search in
+%% @param   Pattern pattern to search for
+%% @param   Options options for the match
+%% @returns `{Start, Length}' or `nomatch'
+%% @doc Find the first occurrence of Pattern in Binary.
+%% Options can include `{scope, {Start, Length}}'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec match(Binary :: binary(), Pattern :: binary() | [binary()], Options :: [term()]) ->
+    {non_neg_integer(), non_neg_integer()} | nomatch.
+match(_Binary, _Pattern, _Options) ->
+    erlang:nif_error(undefined).
+
+%%-----------------------------------------------------------------------------
+%% @param   ByteList iolist to convert to binary
+%% @returns binary representation of ByteList
+%% @doc     Works exactly as {@link erlang:list_to_binary/1}.
+%%          This function is provided for completeness.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec list_to_bin(ByteList :: iolist()) -> binary().
+list_to_bin(_ByteList) ->
+    erlang:nif_error(undef).
 
 %%-----------------------------------------------------------------------------
 %% @param   Binary binary to extract a subbinary from

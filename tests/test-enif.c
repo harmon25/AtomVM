@@ -26,8 +26,9 @@
 #include "dictionary.h"
 #include "erl_nif.h"
 #include "erl_nif_priv.h"
-#include "externalterm.h"
+#include "external_term.h"
 #include "globalcontext.h"
+#include "memory.h"
 #include "scheduler.h"
 #include "utils.h"
 
@@ -41,20 +42,27 @@ static ErlNifMonitor down_mon_two = { NULL, 0 };
 
 static int32_t lockable_pid = 0;
 
-// Helper to get the reference count.
-// Uses an internal API
-// Implementation should be updated shall resources be references instead of binaries.
-static uint32_t resource_ref_count(void *resource)
+// Helpers for resource ref_count sub-fields (packed layout).
+// Only valid for resources, not plain refc binaries.
+static size_t resource_ref_count(void *resource)
+{
+    return refc_binary_get_refcount(refc_binary_from_data(resource));
+}
+
+static size_t resource_monitor_refc(void *resource)
 {
     struct RefcBinary *refc = refc_binary_from_data(resource);
-    return refc->ref_count;
+    return (refc->ref_count & REFC_MONITOR_MASK) >> REFC_COUNT_BITS;
 }
+
+static uint32_t dtor_call_count = 0;
 
 static void resource_dtor(ErlNifEnv *env, void *resource)
 {
     UNUSED(env);
 
     cb_read_resource = *((uint32_t *) resource);
+    dtor_call_count++;
 }
 
 static void resource_down(ErlNifEnv *env, void *resource, ErlNifPid *pid, ErlNifMonitor *mon)
@@ -73,6 +81,18 @@ static void resource_down_two(ErlNifEnv *env, void *resource, ErlNifPid *pid, Er
     cb_read_resource_two = *((uint32_t *) resource);
     down_pid_two = *pid;
     down_mon_two = *mon;
+}
+
+// Simulates the race: release resource from within the down handler.
+static void resource_down_releasing(ErlNifEnv *env, void *resource, ErlNifPid *pid, ErlNifMonitor *mon)
+{
+    UNUSED(env);
+
+    cb_read_resource = *((uint32_t *) resource);
+    down_pid = *pid;
+    down_mon = *mon;
+
+    enif_release_resource(resource);
 }
 
 // down handlers should be able to acquire the process tables lock, e.g. to send
@@ -114,7 +134,8 @@ void test_resource(void)
     uint32_t *resource = (uint32_t *) ptr;
     *resource = 42;
 
-    ERL_NIF_TERM resource_term = enif_make_resource(env, ptr);
+    assert(memory_erl_nif_env_ensure_free(env, TERM_BOXED_REFERENCE_RESOURCE_SIZE) == MEMORY_GC_OK);
+    ERL_NIF_TERM resource_term = term_from_resource(ptr, &env->heap);
     assert(term_is_reference(resource_term));
     assert(term_is_resource_reference(resource_term));
 
@@ -249,18 +270,21 @@ void test_resource_monitor(void)
     cb_read_resource = 0;
     down_pid = 0;
     down_mon.ref_ticks = 0;
+    assert(resource_monitor_refc(ptr) == 0);
     ctx = context_new(glb);
     pid = ctx->process_id;
     monitor_result = enif_monitor_process(&env, ptr, &pid, &mon);
     assert(monitor_result == 0);
     assert(cb_read_resource == 0);
     assert(resource_ref_count(ptr) == 1);
+    assert(resource_monitor_refc(ptr) == 1);
 
     scheduler_terminate(ctx);
     assert(cb_read_resource == 42);
     assert(down_pid == pid);
     assert(enif_compare_monitors(&mon, &down_mon) == 0);
     assert(resource_ref_count(ptr) == 1);
+    assert(resource_monitor_refc(ptr) == 0);
 
     // Monitor not called if demonitored
     cb_read_resource = 0;
@@ -272,10 +296,12 @@ void test_resource_monitor(void)
     assert(monitor_result == 0);
     assert(cb_read_resource == 0);
     assert(resource_ref_count(ptr) == 1);
+    assert(resource_monitor_refc(ptr) == 1);
 
     monitor_result = enif_demonitor_process(&env, ptr, &mon);
     assert(monitor_result == 0);
     assert(resource_ref_count(ptr) == 1);
+    assert(resource_monitor_refc(ptr) == 0);
 
     scheduler_terminate(ctx);
     assert(cb_read_resource == 0);
@@ -475,19 +501,20 @@ void test_resource_binary(void)
     uint32_t *resource = (uint32_t *) ptr;
     *resource = 42;
 
-    ERL_NIF_TERM binary = enif_make_resource_binary(env, ptr, "hello", 5);
+    assert(memory_erl_nif_env_ensure_free(env, TERM_BOXED_REFC_BINARY_SIZE) == MEMORY_GC_OK);
+    ERL_NIF_TERM binary = term_from_resource_binary(ptr, "hello", 5, &env->heap, env->global);
     assert(term_is_binary(binary));
     assert(term_is_refc_binary(binary));
     assert(term_binary_size(binary) == 5);
     assert(memcmp(term_binary_data(binary), "hello", 5) == 0);
 
     // When serialized, a resource-managed binary appears becomes a regular binary
-    // There is no externalterm_to_binary_with_roots, so we use the process dictionary
+    // There is no external_term_to_binary_with_roots, so we use the process dictionary
     term old;
     DictionaryFunctionResult result = dictionary_put(&ctx->dictionary, BINARY_ATOM, binary, &old, ctx->global);
     assert(result == DictionaryOk);
 
-    term binary_ext = externalterm_to_binary(ctx, binary);
+    term binary_ext = external_term_to_binary(ctx, binary);
 
     result = dictionary_get(&ctx->dictionary, BINARY_ATOM, &binary, ctx->global);
     assert(result == DictionaryOk);
@@ -497,7 +524,7 @@ void test_resource_binary(void)
     term roots[2];
     roots[0] = binary_ext;
     roots[1] = binary;
-    term binary_unserialized = externalterm_from_binary_with_roots(ctx, 0, 0, &bytes_read, 2, roots);
+    term binary_unserialized = external_term_from_binary_with_roots(ctx, 0, 0, &bytes_read, 2, roots);
     binary_ext = roots[0];
     binary = roots[1];
 
@@ -548,7 +575,8 @@ void test_resource_binaries(void)
     uint32_t *resource = (uint32_t *) ptr;
     *resource = 42;
 
-    ERL_NIF_TERM binary1 = enif_make_resource_binary(env1, ptr, "hello", 5);
+    assert(memory_erl_nif_env_ensure_free(env1, TERM_BOXED_REFC_BINARY_SIZE) == MEMORY_GC_OK);
+    ERL_NIF_TERM binary1 = term_from_resource_binary(ptr, "hello", 5, &env1->heap, env1->global);
     assert(term_is_binary(binary1));
     assert(term_is_refc_binary(binary1));
     assert(term_binary_size(binary1) == 5);
@@ -556,7 +584,8 @@ void test_resource_binaries(void)
 
     assert(cb_read_resource == 0);
 
-    ERL_NIF_TERM binary2 = enif_make_resource_binary(env2, ptr, "world", 5);
+    assert(memory_erl_nif_env_ensure_free(env2, TERM_BOXED_REFC_BINARY_SIZE) == MEMORY_GC_OK);
+    ERL_NIF_TERM binary2 = term_from_resource_binary(ptr, "world", 5, &env2->heap, env2->global);
     assert(term_is_binary(binary2));
     assert(term_is_refc_binary(binary2));
     assert(term_binary_size(binary2) == 5);
@@ -582,6 +611,99 @@ void test_resource_binaries(void)
     assert(cb_read_resource == 0);
 }
 
+void test_resource_release_in_down_handler(void)
+{
+    GlobalContext *glb = globalcontext_new();
+    ErlNifEnv env;
+    erl_nif_env_partial_init_from_globalcontext(&env, glb);
+
+    ErlNifResourceTypeInit init;
+    init.members = 3;
+    init.dtor = resource_dtor;
+    init.stop = NULL;
+    init.down = resource_down_releasing;
+    ErlNifResourceFlags flags;
+
+    ErlNifResourceType *resource_type = enif_init_resource_type(&env, "test_resource", &init, ERL_NIF_RT_CREATE, &flags);
+    assert(resource_type != NULL);
+
+    void *ptr = enif_alloc_resource(resource_type, sizeof(uint32_t));
+    uint32_t *resource = (uint32_t *) ptr;
+    *resource = 42;
+
+    cb_read_resource = 0;
+    dtor_call_count = 0;
+    down_pid = 0;
+    down_mon.ref_ticks = 0;
+
+    Context *ctx = context_new(glb);
+    int32_t pid = ctx->process_id;
+    ErlNifMonitor mon;
+    int monitor_result = enif_monitor_process(&env, ptr, &pid, &mon);
+    assert(monitor_result == 0);
+    assert(resource_ref_count(ptr) == 1);
+    assert(resource_monitor_refc(ptr) == 1);
+
+    scheduler_terminate(ctx);
+
+    assert(down_pid == pid);
+    assert(enif_compare_monitors(&mon, &down_mon) == 0);
+    assert(dtor_call_count == 1);
+    assert(cb_read_resource == 42);
+
+    globalcontext_destroy(glb);
+}
+
+void test_resource_release_in_down_handler_two_monitors(void)
+{
+    GlobalContext *glb = globalcontext_new();
+    ErlNifEnv env;
+    erl_nif_env_partial_init_from_globalcontext(&env, glb);
+
+    ErlNifResourceTypeInit init;
+    init.members = 3;
+    init.dtor = resource_dtor;
+    init.stop = NULL;
+    init.down = resource_down_releasing;
+    ErlNifResourceFlags flags;
+
+    ErlNifResourceType *resource_type = enif_init_resource_type(&env, "test_resource", &init, ERL_NIF_RT_CREATE, &flags);
+    assert(resource_type != NULL);
+
+    void *ptr = enif_alloc_resource(resource_type, sizeof(uint32_t));
+    uint32_t *resource = (uint32_t *) ptr;
+    *resource = 42;
+
+    cb_read_resource = 0;
+    dtor_call_count = 0;
+    down_pid = 0;
+
+    Context *ctx1 = context_new(glb);
+    Context *ctx2 = context_new(glb);
+    int32_t pid1 = ctx1->process_id;
+    int32_t pid2 = ctx2->process_id;
+    ErlNifMonitor mon1, mon2;
+
+    int r = enif_monitor_process(&env, ptr, &pid1, &mon1);
+    assert(r == 0);
+    r = enif_monitor_process(&env, ptr, &pid2, &mon2);
+    assert(r == 0);
+    assert(resource_monitor_refc(ptr) == 2);
+
+    scheduler_terminate(ctx1);
+    assert(down_pid == pid1);
+    assert(dtor_call_count == 1);
+    assert(cb_read_resource == 42);
+
+    down_pid = 0;
+    dtor_call_count = 0;
+    scheduler_terminate(ctx2);
+    assert(down_pid == 0);
+    assert(dtor_call_count == 0);
+
+    globalcontext_destroy(glb);
+}
+
 int main(int argc, char **argv)
 {
     UNUSED(argc);
@@ -595,6 +717,8 @@ int main(int argc, char **argv)
     test_resource_monitor_two_resources_two_processes();
     test_resource_binary();
     test_resource_binaries();
+    test_resource_release_in_down_handler();
+    test_resource_release_in_down_handler_two_monitors();
 
     return EXIT_SUCCESS;
 }

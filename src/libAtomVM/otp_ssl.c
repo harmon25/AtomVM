@@ -39,7 +39,7 @@
 #include <mbedtls/entropy.h>
 #include <mbedtls/ssl.h>
 
-#if defined(MBEDTLS_PSA_CRYPTO_C)
+#if defined(HAVE_PSA_CRYPTO)
 #include <psa/crypto.h>
 #endif
 
@@ -226,16 +226,16 @@ static term nif_ssl_entropy_init(Context *ctx, int argc, term argv[])
     UNUSED(argc);
     UNUSED(argv);
 
-    if (UNLIKELY(memory_ensure_free(ctx, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
-        AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.", __FILE__, __LINE__);
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
     struct EntropyContextResource *rsrc_obj = enif_alloc_resource(entropycontext_resource_type, sizeof(struct EntropyContextResource));
     if (IS_NULL_PTR(rsrc_obj)) {
         AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-    term obj = enif_make_resource(erl_nif_env_from_context(ctx), rsrc_obj);
+    if (UNLIKELY(memory_ensure_free(ctx, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
+        enif_release_resource(rsrc_obj);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term obj = term_from_resource(rsrc_obj, &ctx->heap);
     enif_release_resource(rsrc_obj); // decrement refcount after enif_alloc_resource
 
     mbedtls_entropy_init(&rsrc_obj->context);
@@ -249,16 +249,16 @@ static term nif_ssl_ctr_drbg_init(Context *ctx, int argc, term argv[])
     UNUSED(argc);
     UNUSED(argv);
 
-    if (UNLIKELY(memory_ensure_free(ctx, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
-        AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.", __FILE__, __LINE__);
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
     struct CtrDrbgResource *rsrc_obj = enif_alloc_resource(ctrdrbg_resource_type, sizeof(struct CtrDrbgResource));
     if (IS_NULL_PTR(rsrc_obj)) {
         AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-    term obj = enif_make_resource(erl_nif_env_from_context(ctx), rsrc_obj);
+    if (UNLIKELY(memory_ensure_free(ctx, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
+        enif_release_resource(rsrc_obj);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term obj = term_from_resource(rsrc_obj, &ctx->heap);
     enif_release_resource(rsrc_obj); // decrement refcount after enif_alloc_resource
 
     mbedtls_ctr_drbg_init(&rsrc_obj->context);
@@ -301,21 +301,21 @@ static term nif_ssl_init(Context *ctx, int argc, term argv[])
     UNUSED(argc);
     UNUSED(argv);
 
-    if (UNLIKELY(memory_ensure_free(ctx, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
-        AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.", __FILE__, __LINE__);
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
     struct SSLContextResource *rsrc_obj = enif_alloc_resource(sslcontext_resource_type, sizeof(struct SSLContextResource));
     if (IS_NULL_PTR(rsrc_obj)) {
         AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-    term obj = enif_make_resource(erl_nif_env_from_context(ctx), rsrc_obj);
+    if (UNLIKELY(memory_ensure_free(ctx, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
+        enif_release_resource(rsrc_obj);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term obj = term_from_resource(rsrc_obj, &ctx->heap);
     enif_release_resource(rsrc_obj); // decrement refcount after enif_alloc_resource
 
     mbedtls_ssl_init(&rsrc_obj->context);
 
-#if defined(MBEDTLS_PSA_CRYPTO_C)
+#if defined(HAVE_PSA_CRYPTO)
     psa_status_t status = psa_crypto_init();
     if (UNLIKELY(status != PSA_SUCCESS)) {
         AVM_LOGW(TAG, "Failed to initialize PSA %s:%i.\n", __FILE__, __LINE__);
@@ -354,16 +354,16 @@ static term nif_ssl_config_init(Context *ctx, int argc, term argv[])
     UNUSED(argc);
     UNUSED(argv);
 
-    if (UNLIKELY(memory_ensure_free(ctx, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
-        AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.", __FILE__, __LINE__);
-        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
-    }
     struct SSLConfigResource *rsrc_obj = enif_alloc_resource(sslconfig_resource_type, sizeof(struct SSLConfigResource));
     if (IS_NULL_PTR(rsrc_obj)) {
         AVM_LOGW(TAG, "Failed to allocate memory: %s:%i.\n", __FILE__, __LINE__);
         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
-    term obj = enif_make_resource(erl_nif_env_from_context(ctx), rsrc_obj);
+    if (UNLIKELY(memory_ensure_free(ctx, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
+        enif_release_resource(rsrc_obj);
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
+    }
+    term obj = term_from_resource(rsrc_obj, &ctx->heap);
     enif_release_resource(rsrc_obj); // decrement refcount after enif_alloc_resource
 
     mbedtls_ssl_config_init(&rsrc_obj->config);
@@ -533,10 +533,10 @@ static term make_err_result(int err, Context *ctx)
             return globalcontext_make_atom(ctx->global, ATOM_STR("\xA", "want_write"));
 #if MBEDTLS_VERSION_NUMBER >= 0x020B0000
         case MBEDTLS_ERR_SSL_ASYNC_IN_PROGRESS:
-            return globalcontext_make_atom(ctx->global, ATOM_STR("\xA", "async_in_progress"));
+            return globalcontext_make_atom(ctx->global, ATOM_STR("\x11", "async_in_progress"));
 #if MBEDTLS_VERSION_NUMBER >= 0x020E0000
         case MBEDTLS_ERR_SSL_CRYPTO_IN_PROGRESS:
-            return globalcontext_make_atom(ctx->global, ATOM_STR("\xA", "crypto_in_progress"));
+            return globalcontext_make_atom(ctx->global, ATOM_STR("\x12", "crypto_in_progress"));
 #endif
 #endif
         default: {

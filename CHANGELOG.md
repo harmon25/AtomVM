@@ -26,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added support for list insertion in 'ets:insert/2'.
 - Support to OTP-28
 - Added `atomvm:subprocess/4` to perform pipe/fork/execve on POSIX platforms
-- Added `externalterm_to_term_with_roots` to efficiently preserve roots when allocating memory for external terms.
 - Added `erl_epmd` client implementation to epmd using `socket` module
 - Added support for socket asynchronous API for `recv`, `recvfrom` and `accept`.
 - Added support for UDP multicast with socket API.
@@ -50,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added WiFi support for ESP32P4 via esp-wifi-external for build with ESP-IDF v5.4 and later
 - Added Process.link/1 and unlink/1 to Elixir Process.ex
 - Added `erlang:module_loaded/1`
+- Added `binary:longest_common_prefix/1`
 - Added `binary:replace/3`, `binary:replace/4`
 - Added `binary:match/2` and `binary:match/3`
 - Added `supervisor:which_children/1` and `supervisor:count_children/1`
@@ -70,10 +70,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added initial support for ESP32C5 and ESP32C61
 - Added `Range:size/1`
 - Added missing `ledc` functions for esp32 platform
+- Added support for Elixir GenServer and Supervisor.
+- Added support for 10 new STM32 families by switching to STM32 official SDK
+- Added `network:sta_connect/0,1` and `network:sta_disconnect/0` to ESP32 network driver.
+- Added option to set a custom callback for esp32 network driver
+`disconnected` events
+- Added `network:sta_status/0` to get the current connection state of the sta interface.
+- Added ESP32 `-DATOMVM_ELIXIR_SUPPORT=on` configuration option
+- Added support for ESP32 development builds to include NVS partition data at build time
+- Added missing `inet` functions: `ntoa/1`, `parse_address/1`, `parse_ipv4_address/1`,
+`parse_ipv4strict_address/1`
+- Added support for new `is_integer/3` BIF, introduced with OTP-29
+- Support for OTP-29
+- Added `base64:encode/2` and `base64:decode/2` functions, that take in addition also a map with
+encoding/decoding options, also Elixir `(url_)encode64`/`(url_)decode64` have been added to `Base`.
+- Added `nanosecond` and `native` time unit support to `erlang:system_time/1`, `erlang:monotonic_time/1`, and `calendar:system_time_to_universal_time/2`
+- Added `erlang:system_time/0`, `erlang:monotonic_time/0`, and `os:system_time/0,1` NIFs
+- Added `filename:join/1` and `filename:split/1`
+- Added `crypto:generate_key/2`, `crypto:compute_key/4`, `crypto:sign/4` and `crypto:verify/5`
+- Added `crypto:hash_init/1`, `crypto:hash_update/2` and `crypto:hash_final/1`
+- Added `crypto:crypto_init/3`, `crypto:crypto_init/4`, `crypto:crypto_update/2` and
+`crypto:crypto_final/1`
+- Added `crypto:crypto_one_time_aead/6` and `crypto:crypto_one_time_aead/7`
+- Added `crypto:pbkdf2_hmac/5` and `crypto:hash_equals/2`
+- Added `crypto:mac/4`, `crypto:mac_init/3`, `crypto:mac_update/2`, `crypto:mac_final/1` and
+`crypto:mac_finalN/2`
+- Added `crypto:info_lib/0`
 
 ### Changed
 
-- Removed `externalterm_to_term_copy` added in [0.6.5] and introduced flags to `externalterm_to_term` to perform copy.
 - Release images for ESP32 chips are built with ESP-IDF v5.5
 - Only support ESP32P4 on ESP-IDF v5.5.2, v5.4.4 and later.
 - ESP32: SPI peripheral defaults to `"spi2"` instead of deprecated `hspi`
@@ -90,6 +115,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 instead `badarg`.
 - Resources are now references instead of empty binaries.
 - Badarg error return from calling crypto:crypto_one_time with invalid arguments now matches OTP24+.
+- When function head doesn't match, function arguments are now in stacktrace
+- Function arguments are added to stacktrace also for some NIFs, when one of the arguments is badarg
+- Using a custom callback for STA disconnected events in esp32 network driver will stop automatic re-connect,
+allowing applications to use scan results or other means to decide when and where to connect.
+- ESP32 cmake build options are now also exposed in `idf.py menuconfig`.
+- ESP32 Elixir support is determined automatically from the offset of `boot.avm` in the partition
+table.
+- ESP32 ports now flash a complete working image using the `idf.py flash` task.
+- ESP32 platform now uses reproducible builds.
+- C API: `externalterm` module was renamed to `external_term` and it has a completely new API
 
 ### Fixed
 
@@ -105,6 +140,8 @@ instead `badarg`.
 - Supervisor now honors period and intensity options.
 - Fix supervisor crash if a `one_for_one` child fails to restart.
 - Fix collision in references created with `make_ref/0` on 32 bits platforms.
+- Fixed a bug in `OP_BS_CREATE_BIN`
+- Fix re-raise behavior by implementing `erlang:raise/3` 3rd argument support
 
 ## [0.6.7] - Unreleased
 

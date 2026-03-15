@@ -32,6 +32,7 @@
 #include "interop.h"
 #include "list.h"
 #include "mailbox.h"
+#include "otp_crypto.h"
 #include "posix_nifs.h"
 #include "refc_binary.h"
 #include "resources.h"
@@ -161,6 +162,50 @@ GlobalContext *globalcontext_new(void)
     }
 #endif
 
+#ifdef HAVE_PSA_CRYPTO
+    glb->psa_hash_op_resource_type = enif_init_resource_type(&env, "psa_hash_op", &psa_hash_op_resource_type_init, ERL_NIF_RT_CREATE, NULL);
+    if (IS_NULL_PTR(glb->psa_hash_op_resource_type)) {
+#if HAVE_OPEN && HAVE_CLOSE
+        resource_type_destroy(glb->posix_fd_resource_type);
+#endif
+#ifndef AVM_NO_SMP
+        smp_rwlock_destroy(glb->modules_lock);
+#endif
+        free(glb->modules_table);
+        atom_table_destroy(glb->atom_table);
+        free(glb);
+        return NULL;
+    }
+    glb->psa_cipher_op_resource_type = enif_init_resource_type(
+        &env, "psa_cipher_op", &psa_cipher_op_resource_type_init, ERL_NIF_RT_CREATE, NULL);
+    if (IS_NULL_PTR(glb->psa_cipher_op_resource_type)) {
+#if HAVE_OPEN && HAVE_CLOSE
+        resource_type_destroy(glb->posix_fd_resource_type);
+#endif
+#ifndef AVM_NO_SMP
+        smp_rwlock_destroy(glb->modules_lock);
+#endif
+        free(glb->modules_table);
+        atom_table_destroy(glb->atom_table);
+        free(glb);
+        return NULL;
+    }
+    glb->psa_mac_op_resource_type = enif_init_resource_type(
+        &env, "psa_mac_op", &psa_mac_op_resource_type_init, ERL_NIF_RT_CREATE, NULL);
+    if (IS_NULL_PTR(glb->psa_mac_op_resource_type)) {
+#if HAVE_OPEN && HAVE_CLOSE
+        resource_type_destroy(glb->posix_fd_resource_type);
+#endif
+#ifndef AVM_NO_SMP
+        smp_rwlock_destroy(glb->modules_lock);
+#endif
+        free(glb->modules_table);
+        atom_table_destroy(glb->atom_table);
+        free(glb);
+        return NULL;
+    }
+#endif
+
     sys_init_platform(glb);
 
 #ifndef AVM_NO_SMP
@@ -240,7 +285,7 @@ COLD_FUNC void globalcontext_destroy(GlobalContext *glb)
         struct RefcBinary *refc = GET_LIST_ENTRY(item, struct RefcBinary, head);
 #ifndef NDEBUG
         if (refc->resource_type) {
-            fprintf(stderr, "Warning, dangling resource of type %s, ref_count = %d, data = %p\n", refc->resource_type->name, (int) refc->ref_count, (void *) refc->data);
+            fprintf(stderr, "Warning, dangling resource of type %s, ref_count = %d, data = %p\n", refc->resource_type->name, (int) refc_binary_get_refcount(refc), (void *) refc->data);
         } else {
             fprintf(stderr, "Warning, dangling refc binary, ref_count = %d\n", (int) refc->ref_count);
         }
@@ -262,6 +307,7 @@ COLD_FUNC void globalcontext_destroy(GlobalContext *glb)
     smp_mutex_destroy(glb->schedulers_mutex);
     smp_rwlock_destroy(glb->modules_lock);
 #endif
+    synclist_destroy(&glb->dist_connections);
     synclist_destroy(&glb->registered_processes);
     synclist_destroy(&glb->processes_table);
 
@@ -504,11 +550,11 @@ void globalcontext_init_process(GlobalContext *glb, Context *ctx)
 {
     ctx->global = glb;
 
-    synclist_append(&glb->processes_table, &ctx->processes_table_head);
     SMP_SPINLOCK_LOCK(&glb->processes_spinlock);
     ctx->process_id = ++glb->last_process_id;
     list_append(&glb->waiting_processes, &ctx->processes_list_head);
     SMP_SPINLOCK_UNLOCK(&glb->processes_spinlock);
+    synclist_append(&glb->processes_table, &ctx->processes_table_head);
 }
 
 bool globalcontext_register_process(GlobalContext *glb, int atom_index, term local_pid_or_port)

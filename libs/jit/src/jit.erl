@@ -24,7 +24,7 @@
     stream/1,
     backend/2,
     beam_chunk_header/3,
-    compile/6
+    compile/7
 ]).
 
 % NIFs
@@ -101,6 +101,7 @@
     atom_resolver :: fun((integer()) -> atom()),
     literal_resolver :: fun((integer()) -> any()),
     type_resolver :: fun((integer()) -> any()),
+    import_resolver :: fun((integer()) -> {atom(), atom(), non_neg_integer()}),
     tail_cache :: [{tuple(), non_neg_integer()}]
 }).
 
@@ -134,18 +135,20 @@ compile(
     AtomResolver,
     LiteralResolver,
     TypeResolver,
+    ImportResolver,
     MMod,
     MSt0
 ) when OpcodeMax =< ?OPCODE_MAX ->
-    MSt1 = MMod:jump_table(MSt0, LabelsCount),
     State0 = #state{
         line_offsets = [],
         labels_count = LabelsCount,
         atom_resolver = AtomResolver,
         literal_resolver = LiteralResolver,
         type_resolver = TypeResolver,
+        import_resolver = ImportResolver,
         tail_cache = []
     },
+    MSt1 = MMod:jump_table(MSt0, LabelsCount),
     {State1, MSt2} = first_pass(Opcodes, MMod, MSt1, State0),
     MSt3 = second_pass(MMod, MSt2, State1),
     MSt4 = MMod:flush(MSt3),
@@ -155,11 +158,12 @@ compile(
     _AtomResolver,
     _LiteralResolver,
     _TypeResolver,
+    _ImportResolver,
     _MMod,
     _MSt
 ) ->
     error(badarg, [OpcodeMax]);
-compile(CodeChunk, _AtomResolver, _LiteralResolver, _TypeResolver, _MMod, _MSt) ->
+compile(CodeChunk, _AtomResolver, _LiteralResolver, _TypeResolver, _ImportResolver, _MMod, _MSt) ->
     error(badarg, [CodeChunk]).
 
 % 1
@@ -175,28 +179,37 @@ first_pass(
 % 2
 first_pass(<<?OP_FUNC_INFO, Rest0/binary>>, MMod, MSt0, #state{tail_cache = TC} = State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
-    {_ModuleAtom, Rest1} = decode_atom(Rest0),
-    {_FunctionName, Rest2} = decode_atom(Rest1),
-    {_Arity, Rest3} = decode_literal(Rest2),
-    ?TRACE("OP_FUNC_INFO ~p, ~p, ~p\n", [_ModuleAtom, _FunctionName, _Arity]),
-    % Implement function clause at the previous label.
+    {_ModuleAtomIndex, Rest1} = decode_atom(Rest0),
+    {FunctionAtomIndex, Rest2} = decode_atom(Rest1),
+    {Arity, Rest3} = decode_literal(Rest2),
+    ?TRACE("OP_FUNC_INFO ~p, ~p, ~p\n", [_ModuleAtomIndex, FunctionAtomIndex, Arity]),
     Offset = MMod:offset(MSt0),
     {MSt1, OffsetReg} = MMod:move_to_native_register(MSt0, Offset),
-    TailCacheKey = {call_primitive_last, ?PRIM_RAISE_ERROR, [OffsetReg, ?FUNCTION_CLAUSE_ATOM]},
-    State1 =
+    {MSt2, FunctionAtomIndexReg} = MMod:move_to_native_register(MSt1, FunctionAtomIndex),
+    {MSt3, ArityReg} = MMod:move_to_native_register(MSt2, Arity),
+    TailCacheKey =
+        {call_primitive_last, ?PRIM_RAISE_ERROR_MFA, [OffsetReg, FunctionAtomIndexReg, ArityReg]},
+    {MSt4, State1} =
         case lists:keyfind(TailCacheKey, 1, TC) of
             false ->
-                MSt3 = MMod:call_primitive_last(MSt1, ?PRIM_RAISE_ERROR, [
-                    ctx, jit_state, {free, OffsetReg}, ?FUNCTION_CLAUSE_ATOM
+                CacheOffset = MMod:offset(MSt3),
+                MSt4a = MMod:call_primitive_last(MSt3, ?PRIM_RAISE_ERROR_MFA, [
+                    ctx,
+                    jit_state,
+                    {free, OffsetReg},
+                    {free, FunctionAtomIndexReg},
+                    {free, ArityReg}
                 ]),
-                State0#state{tail_cache = [{TailCacheKey, Offset} | TC]};
+                {MSt4a, State0#state{tail_cache = [{TailCacheKey, CacheOffset} | TC]}};
             {TailCacheKey, CacheOffset} ->
-                MSt2 = MMod:jump_to_offset(MSt1, CacheOffset),
-                MSt3 = MMod:free_native_registers(MSt2, [OffsetReg]),
-                State0
+                MSt4a = MMod:jump_to_offset(MSt3, CacheOffset),
+                MSt4b = MMod:free_native_registers(MSt4a, [
+                    OffsetReg, FunctionAtomIndexReg, ArityReg
+                ]),
+                {MSt4b, State0}
         end,
-    ?ASSERT_ALL_NATIVE_FREE(MSt3),
-    first_pass(Rest3, MMod, MSt3, State1);
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest3, MMod, MSt4, State1);
 % 3
 first_pass(
     <<?OP_INT_CALL_END>>, MMod, MSt0, #state{labels_count = LabelsCount} = State
@@ -276,7 +289,7 @@ first_pass(<<?OP_CALL_EXT, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("OP_CALL_EXT ~p, ~p\n", [Arity, Index]),
     MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
     MSt2 = MMod:call_primitive_with_cp(MSt1, ?PRIM_CALL_EXT, [
-        ctx, jit_state, offset, Arity, Index, -1
+        ctx, jit_state, offset, Arity, Index, ?CALL_EXT_NO_DEALLOC_MFA
     ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest2, MMod, MSt2, State0);
@@ -553,16 +566,10 @@ first_pass(<<?OP_IS_LT, Rest0/binary>>, MMod, MSt0, State0) ->
 first_pass(<<?OP_IS_GE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {Label, Rest1} = decode_label(Rest0),
-    {MSt1, Arg1, Rest2} = decode_compact_term(Rest1, MMod, MSt0, State0),
-    {MSt2, Arg2, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
+    {MSt1, Arg1, Rest2} = decode_typed_compact_term(Rest1, MMod, MSt0, State0),
+    {MSt2, Arg2, Rest3} = decode_typed_compact_term(Rest2, MMod, MSt1, State0),
     ?TRACE("OP_IS_GE ~p, ~p, ~p\n", [Label, Arg1, Arg2]),
-    {MSt3, ResultReg} = MMod:call_primitive(MSt2, ?PRIM_TERM_COMPARE, [
-        ctx, jit_state, {free, Arg1}, {free, Arg2}, ?TERM_COMPARE_NO_OPTS
-    ]),
-    MSt4 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt3),
-    MSt5 = cond_jump_to_label(
-        {'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, MSt4
-    ),
+    MSt5 = op_is_ge(MMod, MSt2, Label, Arg1, Arg2),
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
     first_pass(Rest3, MMod, MSt5, State0);
 % 41
@@ -1034,7 +1041,9 @@ first_pass(<<?OP_CALL_EXT_ONLY, Rest0/binary>>, MMod, MSt0, State0) ->
     {Index, Rest2} = decode_literal(Rest1),
     ?TRACE("OP_CALL_EXT_ONLY ~p, ~p\n", [Arity, Index]),
     MSt1 = MMod:decrement_reductions_and_maybe_schedule_next(MSt0),
-    MSt2 = MMod:call_primitive_last(MSt1, ?PRIM_CALL_EXT, [ctx, jit_state, offset, Arity, Index, -1]),
+    MSt2 = MMod:call_primitive_last(MSt1, ?PRIM_CALL_EXT, [
+        ctx, jit_state, offset, Arity, Index, ?CALL_EXT_NO_DEALLOC
+    ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt2),
     first_pass(Rest2, MMod, MSt2, State0);
 % 96
@@ -1154,7 +1163,7 @@ first_pass(<<?OP_RAISE, Rest0/binary>>, MMod, MSt0, State0) ->
     {MSt2, ExcValue, Rest2} = decode_compact_term(Rest1, MMod, MSt1, State0),
     ?TRACE("OP_RAISE ~p, ~p\n", [Stacktrace, ExcValue]),
     MSt3 = MMod:call_primitive_last(MSt2, ?PRIM_RAISE, [
-        ctx, jit_state, offset, Stacktrace, ExcValue
+        ctx, jit_state, Stacktrace, ExcValue
     ]),
     ?ASSERT_ALL_NATIVE_FREE(MSt3),
     first_pass(Rest2, MMod, MSt3, State0);
@@ -1348,10 +1357,12 @@ first_pass(<<?OP_BS_GET_BINARY2, Rest0/binary>>, MMod, MSt0, State0) ->
                 {MSt11, SizeReg};
             is_integer(Size) ->
                 % SizeReg is binary size
-                % SizeVal is a constant
-                MSt11 = MMod:sub(MSt10, SizeReg, Size bsl 4),
+                % Size is a tagged integer: (N bsl 4) bor 0xF
+                % SizeBytes is the raw byte count
+                SizeBytes = Size bsr 4,
+                MSt11 = MMod:sub(MSt10, SizeReg, SizeBytes),
                 MSt12 = cond_jump_to_label({{free, SizeReg}, '<', BSOffsetReg1}, Fail, MMod, MSt11),
-                {MSt12, Size bsl 4};
+                {MSt12, SizeBytes};
             true ->
                 {MSt11, SizeValReg} = MMod:move_to_native_register(MSt10, Size),
                 MSt12 = MMod:if_else_block(
@@ -1472,31 +1483,21 @@ first_pass(<<?OP_GC_BIF1, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt7),
     first_pass(Rest5, MMod, MSt7, State0);
 % 125
-first_pass(<<?OP_GC_BIF2, Rest0/binary>>, MMod, MSt0, State0) ->
+first_pass(
+    <<?OP_GC_BIF2, Rest0/binary>>, MMod, MSt0, #state{import_resolver = ImportResolver} = State0
+) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {FailLabel, Rest1} = decode_label(Rest0),
     {Live, Rest2} = decode_literal(Rest1),
-    {MSt1, TrimResultReg} = MMod:call_primitive(MSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
-    MSt2 = MMod:free_native_registers(MSt1, [TrimResultReg]),
-    CappedLive =
-        if
-            Live > ?MAX_REG -> ?MAX_REG;
-            true -> Live
-        end,
     {Bif, Rest3} = decode_literal(Rest2),
-    {MSt3, FuncPtr} = MMod:call_primitive(MSt2, ?PRIM_GET_IMPORTED_BIF, [
-        jit_state, Bif
-    ]),
-    {MSt4, Arg1, Rest4} = decode_compact_term(Rest3, MMod, MSt3, State0),
-    {MSt5, Arg2, Rest5} = decode_compact_term(Rest4, MMod, MSt4, State0),
-    {MSt6, Dest, Rest6} = decode_dest(Rest5, MMod, MSt5),
+    {MSt1, Arg1, Rest4} = decode_typed_compact_term(Rest3, MMod, MSt0, State0),
+    {MSt2, Arg2, Rest5} = decode_typed_compact_term(Rest4, MMod, MSt1, State0),
+    {MSt3, Dest, Rest6} = decode_dest(Rest5, MMod, MSt2),
+    {BifModule, BifFunName, 2} = ImportResolver(Bif),
     ?TRACE("OP_GC_BIF2 ~p, ~p, ~p, ~p, ~p, ~p\n", [FailLabel, Live, Bif, Arg1, Arg2, Dest]),
-    {MSt7, ResultReg} = MMod:call_func_ptr(MSt6, {free, FuncPtr}, [
-        ctx, FailLabel, CappedLive, {free, Arg1}, {free, Arg2}
-    ]),
-    MSt8 = bif_faillabel_test(FailLabel, MMod, MSt7, {free, ResultReg}, {free, Dest}),
-    ?ASSERT_ALL_NATIVE_FREE(MSt8),
-    first_pass(Rest6, MMod, MSt8, State0);
+    MSt4 = op_gc_bif2(MMod, MSt3, FailLabel, Live, Bif, BifModule, BifFunName, Arg1, Arg2, Dest),
+    ?ASSERT_ALL_NATIVE_FREE(MSt4),
+    first_pass(Rest6, MMod, MSt4, State0);
 % 129
 first_pass(<<?OP_IS_BITSTR, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
@@ -2018,13 +2019,13 @@ first_pass(<<?OP_RAW_RAISE, Rest0/binary>>, MMod, MSt0, State0) ->
     ?ASSERT_ALL_NATIVE_FREE(MSt0),
     {MSt1, ExClassReg} = MMod:move_to_native_register(MSt0, {x_reg, 0}),
     MSt2 = MMod:if_block(MSt1, {ExClassReg, '==', ?ERROR_ATOM}, fun(BSt0) ->
-        MMod:call_primitive_last(BSt0, ?PRIM_HANDLE_ERROR, [ctx, jit_state, offset])
+        MMod:call_primitive_last(BSt0, ?PRIM_RAW_RAISE, [ctx, jit_state])
     end),
     MSt3 = MMod:if_block(MSt2, {ExClassReg, '==', ?LOWERCASE_EXIT_ATOM}, fun(BSt0) ->
-        MMod:call_primitive_last(BSt0, ?PRIM_HANDLE_ERROR, [ctx, jit_state, offset])
+        MMod:call_primitive_last(BSt0, ?PRIM_RAW_RAISE, [ctx, jit_state])
     end),
     MSt4 = MMod:if_block(MSt3, {{free, ExClassReg}, '==', ?THROW_ATOM}, fun(BSt0) ->
-        MMod:call_primitive_last(BSt0, ?PRIM_HANDLE_ERROR, [ctx, jit_state, offset])
+        MMod:call_primitive_last(BSt0, ?PRIM_RAW_RAISE, [ctx, jit_state])
     end),
     MSt5 = MMod:move_to_vm_register(MSt4, ?BADARG_ATOM, {x_reg, 0}),
     ?ASSERT_ALL_NATIVE_FREE(MSt5),
@@ -2532,7 +2533,26 @@ first_pass(<<?OP_BS_MATCH, Rest0/binary>>, MMod, MSt0, State0) ->
     ?TRACE("]\n", []),
     MSt9 = MMod:free_native_registers(MSt8, [BSBinaryReg, NewBSOffsetReg, MatchStateReg2]),
     ?ASSERT_ALL_NATIVE_FREE(MSt9),
-    first_pass(Rest4, MMod, MSt9, State0).
+    first_pass(Rest4, MMod, MSt9, State0);
+% 185
+first_pass(<<?OP_BIF3, Rest0/binary>>, MMod, MSt0, State0) ->
+    ?ASSERT_ALL_NATIVE_FREE(MSt0),
+    {FailLabel, Rest1} = decode_label(Rest0),
+    {Bif, Rest2} = decode_literal(Rest1),
+    {MSt1, FuncPtr} = MMod:call_primitive(MSt0, ?PRIM_GET_IMPORTED_BIF, [
+        jit_state, Bif
+    ]),
+    {MSt2, Arg1, Rest3} = decode_compact_term(Rest2, MMod, MSt1, State0),
+    {MSt3, Arg2, Rest4} = decode_compact_term(Rest3, MMod, MSt2, State0),
+    {MSt4, Arg3, Rest5} = decode_compact_term(Rest4, MMod, MSt3, State0),
+    {MSt5, Dest, Rest6} = decode_dest(Rest5, MMod, MSt4),
+    ?TRACE("OP_BIF3 ~p, ~p, ~p, ~p, ~p, ~p\n", [FailLabel, Bif, Arg1, Arg2, Arg3, Dest]),
+    {MSt6, ResultReg} = MMod:call_func_ptr(MSt5, {free, FuncPtr}, [
+        ctx, FailLabel, {free, Arg1}, {free, Arg2}, {free, Arg3}
+    ]),
+    MSt7 = bif_faillabel_test(FailLabel, MMod, MSt6, {free, ResultReg}, {free, Dest}),
+    ?ASSERT_ALL_NATIVE_FREE(MSt7),
+    first_pass(Rest6, MMod, MSt7, State0).
 
 first_pass_bs_create_bin_compute_size(
     AtomType, Src, _Size, _SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt0, State0
@@ -2566,48 +2586,34 @@ first_pass_bs_create_bin_compute_size(
     float, Src, Size, _SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt0, State0
 ) ->
     MSt1 = verify_is_number(Src, Fail, MMod, MSt0),
-    % Verify and get the float size (defaults to 64 if nil)
-    case Size of
-        ?TERM_NIL ->
-            {MSt1, AccLiteralSize0 + 64, AccSizeReg0, State0};
-        _ ->
-            {MSt2, SizeValue} = term_to_int(Size, Fail, MMod, MSt1),
-            if
-                is_integer(SizeValue) ->
-                    % If size is a literal, compiler would only allow 16/32/64.
-                    {MSt2, AccLiteralSize0 + SizeValue, AccSizeReg0, State0};
-                is_atom(SizeValue) ->
-                    % Check if size is 16, 32, or 64 using 'and' of '!=' checks
-                    MSt3 = cond_raise_badarg_or_jump_to_fail_label(
-                        {'and', [
-                            {SizeValue, '!=', 16},
-                            {SizeValue, '!=', 32},
-                            {SizeValue, '!=', 64}
-                        ]},
-                        Fail,
-                        MMod,
-                        MSt2
-                    ),
-                    case AccSizeReg0 of
-                        undefined ->
-                            {MSt3, AccLiteralSize0, SizeValue, State0};
-                        _ ->
-                            MSt4 = MMod:add(MSt3, AccSizeReg0, SizeValue),
-                            MSt5 = MMod:free_native_registers(MSt4, [SizeValue]),
-                            {MSt5, AccLiteralSize0, AccSizeReg0, State0}
-                    end
+    {MSt2, SizeValue} = term_to_int(Size, Fail, MMod, MSt1),
+    if
+        is_integer(SizeValue) ->
+            {MSt2, AccLiteralSize0 + SizeValue, AccSizeReg0, State0};
+        is_atom(SizeValue) ->
+            MSt3 = cond_raise_badarg_or_jump_to_fail_label(
+                {'and', [
+                    {SizeValue, '!=', 16},
+                    {SizeValue, '!=', 32},
+                    {SizeValue, '!=', 64}
+                ]},
+                Fail,
+                MMod,
+                MSt2
+            ),
+            case AccSizeReg0 of
+                undefined ->
+                    {MSt3, AccLiteralSize0, SizeValue, State0};
+                _ ->
+                    MSt4 = MMod:add(MSt3, AccSizeReg0, SizeValue),
+                    MSt5 = MMod:free_native_registers(MSt4, [SizeValue]),
+                    {MSt5, AccLiteralSize0, AccSizeReg0, State0}
             end
     end;
 first_pass_bs_create_bin_compute_size(
     integer, Src, Size, SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt0, State0
 ) ->
     MSt1 = verify_is_any_integer(Src, Fail, MMod, MSt0),
-    first_pass_bs_create_bin_compute_size(
-        string, Src, Size, SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt1, State0
-    );
-first_pass_bs_create_bin_compute_size(
-    string, _Src, Size, SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt1, State0
-) ->
     MSt2 = verify_is_integer(Size, Fail, MMod, MSt1),
     {MSt3, SizeValue} = term_to_int(Size, 0, MMod, MSt2),
     MSt5 =
@@ -2639,6 +2645,23 @@ first_pass_bs_create_bin_compute_size(
                     {MSt8, AccLiteralSize0, AccSizeReg0, State0}
             end
     end;
+first_pass_bs_create_bin_compute_size(
+    string, _Src, Size, SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt1, State0
+) ->
+    MSt2 = verify_is_integer(Size, Fail, MMod, MSt1),
+    {MSt3, SizeValue} = term_to_int(Size, 0, MMod, MSt2),
+    MSt5 =
+        if
+            is_integer(SizeValue) andalso SizeValue > 0 ->
+                MSt3;
+            is_integer(SizeValue) andalso Fail =:= 0 ->
+                MMod:call_primitive_last(MSt3, ?PRIM_RAISE_ERROR, [
+                    ctx, jit_state, offset, ?BADARG_ATOM
+                ]);
+            is_integer(SizeValue) andalso Fail =/= 0 ->
+                MMod:jump_to_label(MSt3, Fail)
+        end,
+    {MSt5, AccLiteralSize0 + (SizeValue * SegmentUnit), AccSizeReg0, State0};
 first_pass_bs_create_bin_compute_size(
     AtomType, Src, ?ALL_ATOM, _SegmentUnit, Fail, AccLiteralSize0, AccSizeReg0, MMod, MSt0, State0
 ) when AtomType =:= binary orelse AtomType =:= append orelse AtomType =:= private_append ->
@@ -2756,17 +2779,9 @@ first_pass_bs_create_bin_insert_value(
 first_pass_bs_create_bin_insert_value(
     float, Flags, Src, Size, _SegmentUnit, Fail, CreatedBin, Offset, MMod, MSt0
 ) ->
-    % Src is a term (boxed float or integer)
     {MSt1, SrcReg} = MMod:move_to_native_register(MSt0, Src),
     {MSt2, FlagsValue} = decode_flags_list(Flags, MMod, MSt1),
-    % Get the float size (defaults to 64 if nil)
-    {MSt3, SizeValue} =
-        case Size of
-            ?TERM_NIL ->
-                {MSt2, 64};
-            _ ->
-                term_to_int(Size, Fail, MMod, MSt2)
-        end,
+    {MSt3, SizeValue} = term_to_int(Size, Fail, MMod, MSt2),
     % Call single primitive with size parameter
     {MSt4, BoolResult} = MMod:call_primitive(MSt3, ?PRIM_BITSTRING_INSERT_FLOAT, [
         CreatedBin, Offset, {free, SrcReg}, SizeValue, {free, FlagsValue}
@@ -2783,14 +2798,9 @@ first_pass_bs_create_bin_insert_value(
 ) ->
     {MSt1, SrcValue} = term_to_int(Src, Fail, MMod, MSt0),
     {MSt2, SizeValue} = term_to_int(Size, Fail, MMod, MSt1),
-    {MSt3, BitSize} =
-        if
-            is_integer(SizeValue) andalso is_integer(SegmentUnit) ->
-                {MSt2, SizeValue * SegmentUnit};
-            true ->
-                {MMod:mul(MSt2, SizeValue, SegmentUnit), SizeValue}
-        end,
-    {MSt4, VoidResult} = MMod:call_primitive(MSt3, ?PRIM_BITSTRING_COPY_MODULE_STR, [
+    true = is_integer(SizeValue) andalso is_integer(SegmentUnit),
+    BitSize = SizeValue * SegmentUnit,
+    {MSt4, VoidResult} = MMod:call_primitive(MSt2, ?PRIM_BITSTRING_COPY_MODULE_STR, [
         ctx, jit_state, CreatedBin, Offset, {free, SrcValue}, BitSize
     ]),
     MSt5 = MMod:free_native_registers(MSt4, [VoidResult]),
@@ -3139,7 +3149,7 @@ do_get_tail(
     MSt10 = MMod:free_native_registers(MSt9, [MatchStateReg0]),
     {MSt11, BSBinaryReg} = MMod:and_(MSt10, {free, BSBinaryReg}, ?TERM_PRIMARY_CLEAR_MASK),
     {MSt12, TailBytesReg1} = MMod:get_array_element(MSt11, BSBinaryReg, 1),
-    MSt13 = MMod:sub(MSt12, TailBytesReg0, BSOffseBytesReg),
+    MSt13 = MMod:sub(MSt12, TailBytesReg1, BSOffseBytesReg),
     MSt14 = MMod:add(MSt13, BSBinaryReg, ?TERM_PRIMARY_BOXED),
     {MSt15, ResultTerm} = MMod:call_primitive(MSt14, ?PRIM_TERM_MAYBE_CREATE_SUB_BINARY, [
         ctx, BSBinaryReg, {free, BSOffseBytesReg}, TailBytesReg1
@@ -3186,6 +3196,258 @@ first_pass_bs_match_skip(MatchState, BSOffsetReg, J0, Rest0, MMod, MSt0) ->
     MSt1 = MMod:add(MSt0, BSOffsetReg, Stride),
     ?TRACE("{skip,~p},", [Stride]),
     {J0 - 1, Rest1, MatchState, BSOffsetReg, MSt1}.
+
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    '+',
+    {typed, Arg1, {t_integer, Range1}},
+    {typed, Arg2, {t_integer, Range2}},
+    Dest
+) ->
+    op_gc_bif2_add(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+op_gc_bif2(
+    MMod, MSt0, FailLabel, Live, Bif, erlang, '+', {typed, Arg1, {t_integer, Range1}}, Arg2, Dest
+) when is_integer(Arg2), Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG ->
+    % Arg2 is a small integer literal, extract its value and create a range
+    Arg2Value = Arg2 bsr 4,
+    Range2 = {Arg2Value, Arg2Value},
+    op_gc_bif2_add(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+op_gc_bif2(
+    MMod,
+    MSt0,
+    FailLabel,
+    Live,
+    Bif,
+    erlang,
+    '-',
+    {typed, Arg1, {t_integer, Range1}},
+    {typed, Arg2, {t_integer, Range2}},
+    Dest
+) ->
+    op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+op_gc_bif2(
+    MMod, MSt0, FailLabel, Live, Bif, erlang, '-', {typed, Arg1, {t_integer, Range1}}, Arg2, Dest
+) when is_integer(Arg2), Arg2 band ?TERM_IMMED_TAG_MASK =:= ?TERM_INTEGER_TAG ->
+    % Arg2 is a small integer literal, extract its value and create a range
+    Arg2Value = Arg2 bsr 4,
+    Range2 = {Arg2Value, Arg2Value},
+    op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2);
+% Default case
+op_gc_bif2(
+    MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, {typed, Arg1, _}, {typed, Arg2, _}, Dest
+) ->
+    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
+op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, {typed, Arg1, _}, Arg2, Dest) ->
+    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
+op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, Arg1, {typed, Arg2, _}, Dest) ->
+    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest);
+op_gc_bif2(MMod, MSt0, FailLabel, Live, Bif, _Module, _Function, Arg1, Arg2, Dest) ->
+    op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest).
+
+op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest) ->
+    {MSt1, TrimResultReg} = MMod:call_primitive(MSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),
+    MSt2 = MMod:free_native_registers(MSt1, [TrimResultReg]),
+    CappedLive =
+        if
+            Live > ?MAX_REG -> ?MAX_REG;
+            true -> Live
+        end,
+    {MSt3, FuncPtr} = MMod:call_primitive(MSt2, ?PRIM_GET_IMPORTED_BIF, [
+        jit_state, Bif
+    ]),
+    {MSt4, ResultReg} = MMod:call_func_ptr(MSt3, {free, FuncPtr}, [
+        ctx, FailLabel, CappedLive, {free, Arg1}, {free, Arg2}
+    ]),
+    bif_faillabel_test(FailLabel, MMod, MSt4, {free, ResultReg}, {free, Dest}).
+
+% Check if addition can overflow based on type ranges
+% Returns true if the result is guaranteed to fit in a small integer
+can_inline_add(Range1, Range2, MMod) ->
+    % Platform-specific bounds
+    {MinSafe, MaxSafe} =
+        case MMod:word_size() of
+            % 32-bit
+            4 -> {-(1 bsl 27), (1 bsl 27) - 1};
+            % 64-bit
+            8 -> {-(1 bsl 59), (1 bsl 59) - 1}
+        end,
+
+    case {Range1, Range2} of
+        {{Min1, Max1}, {Min2, Max2}} when
+            is_integer(Min1),
+            is_integer(Max1),
+            is_integer(Min2),
+            is_integer(Max2)
+        ->
+            % Calculate min and max possible results
+            MinResult = Min1 + Min2,
+            MaxResult = Max1 + Max2,
+            % Check if both are in safe range
+            MinResult >= MinSafe andalso MaxResult =< MaxSafe;
+        _ ->
+            % Unbounded range (has '-inf' or '+inf'), cannot optimize
+            false
+    end.
+
+% Optimized addition with compile-time range checking
+op_gc_bif2_add(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) when
+    is_integer(Arg2)
+->
+    case can_inline_add(Range1, Range2, MMod) of
+        true ->
+            % Safe to inline - no overflow possible
+            {MSt1, Reg} = MMod:move_to_native_register(MSt0, Arg1),
+            MSt2 = MMod:add(MSt1, Reg, Arg2 band (bnot (?TERM_IMMED_TAG_MASK))),
+            MSt3 = MMod:move_to_vm_register(MSt2, Reg, Dest),
+            MMod:free_native_registers(MSt3, [Reg, Dest]);
+        false ->
+            % Cannot prove safety, use default BIF call
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end;
+op_gc_bif2_add(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
+    case can_inline_add(Range1, Range2, MMod) of
+        true ->
+            % Safe to inline both arguments
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
+            % Strip tag from Reg2 using AND, then add to Reg1 (Reg1 keeps its tag)
+            {MSt3, Reg2Stripped} = MMod:and_(MSt2, {free, Reg2}, bnot (?TERM_IMMED_TAG_MASK)),
+            MSt4 = MMod:add(MSt3, Reg1, Reg2Stripped),
+            MSt5 = MMod:move_to_vm_register(MSt4, Reg1, Dest),
+            MMod:free_native_registers(MSt5, [Reg1, Reg2Stripped, Dest]);
+        false ->
+            % Cannot prove safety, use default BIF call
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end.
+
+% Check if subtraction can overflow based on type ranges
+% Returns true if the result is guaranteed to fit in a small integer
+can_inline_sub(Range1, Range2, MMod) ->
+    % Platform-specific bounds
+    {MinSafe, MaxSafe} =
+        case MMod:word_size() of
+            % 32-bit
+            4 -> {-(1 bsl 27), (1 bsl 27) - 1};
+            % 64-bit
+            8 -> {-(1 bsl 59), (1 bsl 59) - 1}
+        end,
+
+    case {Range1, Range2} of
+        {{Min1, Max1}, {Min2, Max2}} when
+            is_integer(Min1),
+            is_integer(Max1),
+            is_integer(Min2),
+            is_integer(Max2)
+        ->
+            % Calculate min and max possible results
+            % Min result: Min1 - Max2 (smallest value minus largest value)
+            % Max result: Max1 - Min2 (largest value minus smallest value)
+            MinResult = Min1 - Max2,
+            MaxResult = Max1 - Min2,
+            % Check if both are in safe range
+            MinResult >= MinSafe andalso MaxResult =< MaxSafe;
+        _ ->
+            % Unbounded range (has '-inf' or '+inf'), cannot optimize
+            false
+    end.
+
+% Optimized subtraction with compile-time range checking
+op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) when
+    is_integer(Arg2)
+->
+    case can_inline_sub(Range1, Range2, MMod) of
+        true ->
+            % Safe to inline - no overflow possible
+            {MSt1, Reg} = MMod:move_to_native_register(MSt0, Arg1),
+            MSt2 = MMod:sub(MSt1, Reg, Arg2 band (bnot (?TERM_IMMED_TAG_MASK))),
+            MSt3 = MMod:move_to_vm_register(MSt2, Reg, Dest),
+            MMod:free_native_registers(MSt3, [Reg, Dest]);
+        false ->
+            % Cannot prove safety, use default BIF call
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end;
+op_gc_bif2_sub(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest, Range1, Range2) ->
+    case can_inline_sub(Range1, Range2, MMod) of
+        true ->
+            % Safe to inline both arguments
+            {MSt1, Reg1} = MMod:move_to_native_register(MSt0, Arg1),
+            {MSt2, Reg2} = MMod:move_to_native_register(MSt1, Arg2),
+            % Strip tag from Reg2 using AND, then subtract from Reg1 (Reg1 keeps its tag)
+            {MSt3, Reg2Stripped} = MMod:and_(MSt2, {free, Reg2}, bnot (?TERM_IMMED_TAG_MASK)),
+            MSt4 = MMod:sub(MSt3, Reg1, Reg2Stripped),
+            MSt5 = MMod:move_to_vm_register(MSt4, Reg1, Dest),
+            MMod:free_native_registers(MSt5, [Reg1, Reg2Stripped, Dest]);
+        false ->
+            % Cannot prove safety, use default BIF call
+            op_gc_bif2_default(MMod, MSt0, FailLabel, Live, Bif, Arg1, Arg2, Dest)
+    end.
+
+% Helper to unwrap typed arguments
+unwrap_typed({typed, Arg, _Type}) -> Arg;
+unwrap_typed(Arg) -> Arg.
+
+% Optimized >= comparison for typed integers
+% Test if Arg1 >= Arg2, jump to Label if false (i.e., if Arg1 < Arg2)
+op_is_ge(MMod, MSt0, Label, Arg1, {typed, Arg2, {t_integer, _Range}}) when is_integer(Arg1) ->
+    % Arg1 is integer literal (already tagged by decode_compact_term), Arg2 is typed integer
+    % If Arg2 is boxed (bignum), the comparison result depends on the sign
+    {MSt1, Arg2Reg} = MMod:move_to_native_register(MSt0, Arg2),
+    % Check if Arg2 is a small integer (tagged with 0xF)
+    MSt2 = MMod:if_block(MSt1, {Arg2Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(
+        BSt0
+    ) ->
+        {BSt1, BoxedReg} = MMod:and_(BSt0, Arg2Reg, bnot (?TERM_PRIMARY_MASK)),
+        BSt2 = MMod:move_array_element(BSt1, BoxedReg, 0, BoxedReg),
+        {BSt3, TagReg} = MMod:and_(BSt2, {free, BoxedReg}, ?TERM_BOXED_TAG_MASK),
+        BSt4 = cond_jump_to_label(
+            {{free, TagReg}, '==', ?TERM_BOXED_POSITIVE_INTEGER}, Label, MMod, BSt3
+        ),
+        % Negative bignum falls through here: set Arg2Reg to Arg1 so
+        % the subsequent Arg1 < Arg2Reg comparison is false (no jump)
+        MMod:move_to_native_register(BSt4, Arg1, Arg2Reg)
+    end),
+    % If we're here, Arg2 is a small integer - do inline comparison
+    % is_ge tests Arg1 >= Arg2, jump to Label if Arg1 < Arg2
+    % Arg1 is already tagged, use it directly
+    cond_jump_to_label({Arg1, '<', {free, Arg2Reg}}, Label, MMod, MSt2);
+op_is_ge(MMod, MSt0, Label, {typed, Arg1, {t_integer, _Range}}, Arg2) when is_integer(Arg2) ->
+    % Arg1 is typed integer, Arg2 is integer literal (already tagged by decode_compact_term)
+    % If Arg1 is boxed (bignum), the comparison result depends on the sign
+    {MSt1, Arg1Reg} = MMod:move_to_native_register(MSt0, Arg1),
+    % Check if Arg1 is a small integer (tagged with 0xF)
+    MSt2 = MMod:if_block(MSt1, {Arg1Reg, '&', ?TERM_IMMED_TAG_MASK, '!=', ?TERM_INTEGER_TAG}, fun(
+        BSt0
+    ) ->
+        {BSt1, BoxedReg} = MMod:and_(BSt0, Arg1Reg, bnot (?TERM_PRIMARY_MASK)),
+        BSt2 = MMod:move_array_element(BSt1, BoxedReg, 0, BoxedReg),
+        {BSt3, TagReg} = MMod:and_(BSt2, {free, BoxedReg}, ?TERM_BOXED_TAG_MASK),
+        BSt4 = cond_jump_to_label(
+            {{free, TagReg}, '!=', ?TERM_BOXED_POSITIVE_INTEGER}, Label, MMod, BSt3
+        ),
+        % Positive bignum falls through here: set Arg1Reg to Arg2 so
+        % the subsequent Arg1Reg < Arg2 comparison is false (no jump)
+        MMod:move_to_native_register(BSt4, Arg2, Arg1Reg)
+    end),
+    % If we're here, Arg1 is a small integer - do inline comparison
+    % is_ge tests Arg1 >= Arg2, jump to Label if Arg1 < Arg2
+    % Arg2 is already tagged, use it directly
+    cond_jump_to_label({{free, Arg1Reg}, '<', Arg2}, Label, MMod, MSt2);
+% Fallback: use term_compare
+op_is_ge(MMod, MSt0, Label, Arg1, Arg2) ->
+    {MSt1, ResultReg} = MMod:call_primitive(MSt0, ?PRIM_TERM_COMPARE, [
+        ctx,
+        jit_state,
+        {free, unwrap_typed(Arg1)},
+        {free, unwrap_typed(Arg2)},
+        ?TERM_COMPARE_NO_OPTS
+    ]),
+    MSt2 = handle_error_if({'(int)', ResultReg, '==', ?TERM_COMPARE_MEMORY_ALLOC_FAIL}, MMod, MSt1),
+    cond_jump_to_label({'(int)', {free, ResultReg}, '==', ?TERM_LESS_THAN}, Label, MMod, MSt2).
 
 term_alloc_bin_match_state(Live, Src, Dest, MMod, MSt0) ->
     {MSt1, TrimResultReg} = MMod:call_primitive(MSt0, ?PRIM_TRIM_LIVE_REGS, [ctx, Live]),

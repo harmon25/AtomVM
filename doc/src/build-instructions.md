@@ -64,7 +64,7 @@ Source code is organized as follows:
 
 * `src`  Contains the core AtomVM virtual machine source code;
 * `lib`  Contains the Erlang and Elixir core library source code;
-* `tools` Contains AtomVM tooling, including the `PackBEAM` executable, as well as build support tooling;
+* `tools` Contains build support tooling;
 * `examples` Contains sample programs for demonstration purposes;
 * `tests` Contains test code run as part of test qualification;
 * `doc` Contains documentation source code and content.
@@ -73,11 +73,17 @@ The `src` directory is broken up into the core platform-independent AtomVM libra
 
 ## External dependencies
 
+### `packbeam`
+
+AtomVM depends on `packbeam`. It is used to pack beams as well as assets into AtomVM pack format, `.avm`. `packbeam` source code is downloaded automatically by `rebar3` from `hex` mirrors, and it is then escriptized.
+
+It is possible to use a local copy of `packbeam` source code by setting `PACKBEAM_PATH` variable to a path to a source checkout of [`atomvm_packbeam`](https://github.com/atomvm/atomvm_packbeam) when invoking CMake.
+
 ### `uf2tool`
 
-AtomVM depends on `uf2tool`. It is used to pack both native and Erlang/Elixir/Gleam code for RP2. uf2tool is downloaded automatically by `rebar3` from `hex` mirrors.
+AtomVM depends on `uf2tool`. It is used to pack both native and Erlang/Elixir/Gleam code for RP2. `uf2tool` source code is downloaded automatically by `rebar3` from `hex` mirrors.
 
-It is possible to use a local copy of uf2tool by setting `UF2TOOL_PATH` variable to a path to a source checkout of [`uf2tool`](https://github.com/pguyot/uf2tool) when invoking CMake.
+It is possible to use a local copy of `uf2tool` source code by setting `UF2TOOL_PATH` variable to a path to a source checkout of [`uf2tool`](https://github.com/pguyot/uf2tool) when invoking CMake.
 
 ## Platform Specific Build Instructions
 
@@ -207,7 +213,10 @@ Tests for the following libraries are supported:
 
 Building AtomVM for ESP32 must be done on either a Linux or MacOS build machine.
 
-In order to build a complete AtomVM image for ESP32, you will also need to build AtomVM for the Generic UNIX platform (typically, the same build machine you are suing to build AtomVM for ESP32).
+In order to build a complete AtomVM image for ESP32, you will also need to build AtomVM for the Generic UNIX platform (typically, the same build machine you are using to build AtomVM for ESP32). This is expected to
+be done before building an ESP32 port, since the BEAM libraries packed into the esp32boot.avm (or
+elixir_esp32boot.avm for Elixir-supported builds) are created at the same time as the atomvmlib.avm
+libraries as part of the generic UNIX build.
 
 ### ESP32 Build Requirements
 
@@ -217,7 +226,7 @@ The following software is required in order to build AtomVM for the ESP32 platfo
 * [Espressif IDF SDK](https://www.espressif.com/en/products/sdks/esp-idf) (consult [Release Notes](./release-notes.md) for currently supported versions)
 * `cmake`
 
-Instructions for downloading and installing the Espressif IDF SDK and tool chains are outside of the scope of this document.  Please consult the [IDF SDKGetting Started](https://docs.espressif.com/projects/esp-idf/en/release-v4.4/get-started/index.html) guide for more information.
+Instructions for downloading and installing the Espressif IDF SDK and tool chains are outside of the scope of this document.  Please consult the [IDF SDKGetting Started](https://docs.espressif.com/projects/esp-idf/en/release-v5.5/esp32/get-started/index.html) guide for more information.
 
 ### ESP32 Build Instructions
 
@@ -239,29 +248,31 @@ $ cd <atomvm-source-tree-root>
 $ cd src/platforms/esp32
 ```
 
-If you want to build an image with Elixir modules included you must first have a version of Elixir installed that is compatible with your OTP version, then add the following line to sdkconfig.defaults:
+Start by configuring the default build configuration of local `sdkconfig` for your target device:
+
 ```shell
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-elixir.csv"
+$ idf.py set-target ${CHIP}
 ```
 
-Start by updating the default build configuration of local `sdkconfig` file via the `idf.py reconfigure` command:
+If you want to build a deployment with Elixir modules included you must first have a version of Elixir
+installed that is compatible with your OTP version, and instead use the command:
 
 ```shell
-$ idf.py set-target esp32
-$ idf.py reconfigure
+idf.py -DATOMVM_ELIXIR_SUPPORT=on set-target ${CHIP}
 ```
 
 ```{tip}
-For those familiar with esp-idf the build can be customized using `menuconfig` instead of
-`reconfigure`:
+For those familiar with esp-idf the build can be customized using `menuconfig`:
 
+    $ idf.py set-target ${CHIP}
     $ idf.py menuconfig
 
 This command will bring up a curses dialog box where you can make adjustments such as not including
 AtomVM components that are not desired in a particular build. You can also change the behavior of a
-crash in the VM to print the error and reboot, or halt after the error is printed. Extreme caution
-should be used when changing any non AtomVM settings. You can quit the program by typing `Q`.
-Save the changes, and the program will exit.
+crash in the VM to print the error and reboot, or halt after the error is printed. To configure an
+Elixir supported build under the "Partition Table" setting select the Custom partitions CSV file and
+set this to `partitions-elixir.csv`. Extreme caution should be used when changing any non AtomVM
+settings. You can quit the program by typing `Q`. Save the changes, and the program will exit.
 ```
 
 You can now build AtomVM using the build command:
@@ -270,19 +281,99 @@ You can now build AtomVM using the build command:
 $ idf.py build
 ```
 
-This command, once completed, will create the Espressif bootloader, partition table, and AtomVM binary.  The last line of the output should read something like the following:
+This command, once completed, will create the Espressif bootloader, partition table, and AtomVM binary.  The last line of the output should read something like the following example:
 
-    Project build complete. To flash, run this command:
-    ~/.espressif/python_env/idf5.1_py3.11_env/bin/python ~/esp/esp-idf-v5.1/components
-    /esptool_py/esptool/esptool.py -p (PORT) -b 921600 --before default_reset
-    --after hard_reset --chip esp32 write_flash --flash_mode dio --flash_size detect
-    --flash_freq 40m 0x1000 build/bootloader/bootloader.bin 0x8000
-    build/partition_table/partition-table.bin 0x10000 build/atomvm-esp32.bin
-    or run 'idf.py -p (PORT) flash'
+```shell
+Project build complete. To flash, run:
+ idf.py flash
+or
+ idf.py -p PORT flash
+or
+ python -m esptool --chip esp32 -b 921600 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_size 4MB --flash_freq 40m 0x1000 build/bootloader/bootloader.bin 0x8000 build/partition_table/partition-table.bin 0x10000 build/atomvm-esp32.bin 0x1d0000 ../../../build/libs/esp32boot/esp32boot.avm
+or from the "/home/joe/AtomVM/src/platforms/esp32/build" directory
+ python -m esptool --chip esp32 -b 921600 --before default_reset --after hard_reset write_flash "@flash_args"
+```
 
-At this point, you can run `idf.py flash` to upload the 3 binaries up to your ESP32 device, and in some development scenarios, this is a preferable shortcut.
+```{important}
+When using the `@flash_args` method be sure to execute from
+<path-to-your-cloned-AtomVM>/src/platforms/esp32/build.
+```
 
-However, first, we will build a single binary image file containing all of the above 3 binaries, as well as the AtomVM core libraries.  See [Building a Release Image](#building-a-release-image), below.  But first, it is helpful to understand a bit about how the AtomVM partitioning scheme works, on the ESP32.
+At this point, you can run `idf.py flash` and have a complete working image. In some development
+scenarios it may be helpful to use `idf.py app-flash` (to only flash a new AtomVM binary to the
+`factory` partition) to avoid re-flashing the entire image if no changes were made to the Erlang or
+Elixir libraries, and the partition table has not been altered. If you have made changes to the
+sdkconfig file (using `idf.py menuconfig` or by other means) it may be necessary to also update the
+bootloader using `idf.py bootloader-flash`. As with most other `idf.py` commands these may be
+combined (for example: `idf.py bootloader-flash app-flash`). For more information about these
+partitions and the flash partitions layout see [Flash Layout](#flash-layout) below.
+
+To build a single binary image file see [Building a Release Image](#building-a-release-image), below.
+
+#### NVS Partition Provisioning
+
+For streamlining deployment of images for an environment developers may pre-provision NVS partition
+data. This is done by creating a file in the AtomVM/src/platforms/esp32 directory named
+`nvs_partition.csv`, an example called `nvs_partition.csv-example` is provided in the same
+directory. If this file exists it will be included by the mkimage.sh script in the build directory.
+The partition is not included in the `idf.py flash` task so that settings made by applications can
+be retained. To update changes or restore to the defaults defined in `nvs_partition.csv` delete the
+generated `build/nvs.bin` file (if present) and execute the command `idf.py nvs-flash`.
+
+This is a more detailed example, with explanations of the structure:
+
+```{csv}
+key,type,encoding,value
+network,namespace,,
+ssid,data,binary,"NETWORK_NAME"
+psk,data,binary,"PASSWORD"
+settings,namespace,,
+feature0,data,binary,"1"
+extra_feature,data,binary,"0"
+token,file,binary,/path/to/file
+```
+
+Let's break this down line by line:
+
+```csv
+key,type,encoding,value
+```
+This is the header describing the columns. It is important that there is no whitespace at the end of each line
+and none separating the commas (`,`) throughout this file.
+
+```csv
+network,namespace,,
+```
+The first entry should have a "key" name and have type "namespace". The namespaces are the same
+used to look up the keys with
+[esp:nvs_get_binary/2 (or /3)](./apidocs/erlang/eavmlib/esp.md#nvs_get_binary2). Note that the
+`encoding` and `value` are empty.
+
+```csv
+ssid,data,binary,"NETWORK_NAME"
+...
+```
+The keys must use encoding type `binary` as this is the only type currently supported by AtomVM.
+
+```csv
+settings,namespace,,
+...
+```
+Multiple namespaces may be used for separation, followed by their keys.
+
+```csv
+token,file,binary,/path/to/file
+```
+External file contents may be included
+
+The initial values flashed to the `nvs` partition may be changed by applications using
+[esp:nvs_put_binary/3](./apidocs/erlang/eavmlib/esp.md#nvs_put_binary3). If you wish to make
+changes to the partition data and re-flash without rebuilding and flashing the entire AtomVM build
+you may delete the generated `build/nvs.bin` file and run `idf.py nvs-flash`, this will regenerate
+and flash the `nvs` partition.
+
+For more information about the format of this file see Espressif's
+[documentation for the NVS generator file format](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/storage/nvs_partition_gen.html#csv-file-format).
 
 ### Running tests for ESP32
 
@@ -400,18 +491,18 @@ The flash layout is roughly as follows (not to scale):
     | partition table | 3KB         |
     +-----------------+             |
     |                 |             |
-    |       NVS       | 24KB        |
+    |       nvs       | 24KB        |
     |                 |             |
     +-----------------+             |
     |     PHY_INIT    | 4KB         |
     +-----------------+             | AtomVM
     |                 |             | binary
     |                 |             | image
-    |                 |             |
     |     AtomVM      |             |
-    |     Virtual     | 1.75MB      |
-    |     Machine     |             |
+    |     Virtual     |             |
+    |     Machine     | 1.75MB      |
     |                 |             |
+    |    (factory)    |             |
     |                 |             |
     +-----------------+             |
     |     boot.avm    | 256-512KB   v
@@ -457,7 +548,7 @@ and `boot.avm` partitions.
 
 ### Building a Release Image
 
-The `<atomvm-source-tree-root>/tools/release/esp32` directory contains the `mkimage.sh` script that can be used to create a single AtomVM image file, which can be distributed as a release, allowing application developers to develop AtomVM applications without having to build AtomVM from scratch.
+The `<atomvm-source-tree-root>/src/platforms/esp32/build` directory contains the `mkimage.sh` script that can be used to create a single AtomVM image file, which can be distributed as a release, allowing application developers to develop AtomVM applications without having to build AtomVM from scratch.
 
 ```{attention}
 Before running the `mkimage.sh` script, you must have a complete build of both the esp32 project, as well as a full
@@ -467,24 +558,20 @@ core Erlang libraries will be written to the `build/libs` directory in the AtomV
 you target a different build directory when running CMake.
 ```
 
-Running this script will generate a single `atomvm-<sha>.img` file in the `build` directory of the esp32 source tree, where `<sha>` is the git hash of the current checkout.  This image contains the ESP32 bootloader, AtomVM executable, and the `eavmlib` and `estdlib` Erlang libraries in one file, which can then be flashed to address `0x1000` for the esp32. The bootloader address varies for other chip variants. See the [flashing a binary image to ESP32](./getting-started-guide.md#flashing-a-binary-image-to-esp32) section of the [Getting Started Guide](./getting-started-guide.md) for a chart with the bootloader offset address of each model.
+Running this script will generate a single `atomvm-<target-chip>.img` file in the `build` directory
+of the esp32 source tree, where `<target-chip>` is the device configured with `set-target`.  This
+image contains the ESP32 bootloader, AtomVM executable, and the `eavmlib` and `estdlib` Erlang
+libraries (and `exavmlib` Elixir libraries if configured for Elixir support) in one file, which can
+then be flashed to address `0x1000` for the esp32. The bootloader address varies for other chip
+variants. See the
+[flashing a binary image to ESP32](./getting-started-guide.md#flashing-a-binary-image-to-esp32)
+section of the [Getting Started Guide](./getting-started-guide.md) for a chart with the bootloader
+offset address of each model.
 
-To build a thin image with only Erlang libraries `mkimage.sh` script is run from the `src/platform/esp32` directory as follows:
+To build a complete image use this command from the `src/platforms/esp32` directory as follows:
 
 ```shell
 $ ./build/mkimage.sh
-Writing output to /home/joe/AtomVM/src/platforms/esp32/build/atomvm-esp32.img
-=============================================
-Wrote bootloader at offset 0x1000 (4096)
-Wrote partition-table at offset 0x8000 (32768)
-Wrote AtomVM Virtual Machine at offset 0x10000 (65536)
-Wrote AtomVM Core BEAM Library at offset 0x1D0000 (1114112)
-```
-
-To build a full image with Erlang and Elixir libraries the path to the previously (during the generic_unix build) built `elixir_esp32boot.avm` must be passed to the `mkimage.sh` script as follows (Note: this is still run from the AtomVM/src/platforms/esp32 directory for the relative path to work - feel free to use the absolute path to this file):
-
-```shell
-$ ./build/mkimage.sh --boot ../../../build/libs/esp32boot/elixir_esp32boot.avm
 Writing output to /home/joe/AtomVM/src/platforms/esp32/build/atomvm-esp32.img
 =============================================
 Wrote bootloader at offset 0x1000 (4096)
@@ -587,7 +674,7 @@ applications for the AtomVM platform.
 
 #### Flashing the core libraries
 
-If you are doing development work on the core Erlang/Elixir libraries and wish to test changes that do not involve the `C` code in the core VM you may flash `esp32boot.avm` (or `elixir_esp32boot.avm` when using an Elixir partition table) to the boot.avm partition (offset 0x1D0000) by using the `flash.sh` script in the esp32 build directory as follows:
+If you are doing development work on the core Erlang/Elixir libraries and wish to test changes that do not involve the `C` code in the core VM you may flash `esp32boot.avm` or `elixir_esp32boot.avm` to the boot.avm partition by using the `flash.sh` script in the esp32 build directory as follows:
 
 ```shell
 $ build/flash.sh -l ../../../build/libs/esp32boot.avm
@@ -621,6 +708,13 @@ Leaving...
 Hard resetting via RTS pin...
 ```
 
+```{attention}
+It is important that you flash the `esp32boot` variant that matches the configuration used to
+create the build currently on the device. Flashing `elixir_esp32boot.avm` to a device that was not
+flashed with an Elixir support build will not work, AtomVM will still try to load an application
+from an address that is now occupied by the `exavmlib` modules.
+```
+
 ### Adding custom Nifs, Ports, and third-party components
 
 While AtomVM is a functional implementation of the Erlang virtual machine, it is nonetheless designed to allow developers to extend the VM to support additional integrations with peripherals and protocols that are not otherwise supported in the core virtual machine.
@@ -629,14 +723,16 @@ AtomVM supports extensions to the VM via the implementation of custom native fun
 
 ```{seealso}
 For more information about building components for the IDF SDK, consult the
-[IDF SDK Build System](https://docs.espressif.com/projects/esp-idf/en/v5.1.3/esp32/api-guides/build-system.html)
+[IDF SDK Build System](https://docs.espressif.com/projects/esp-idf/en/release-v5.5/esp32/api-guides/build-system.html)
 documentation.
 ```
 
 The instructions for adding custom Nifs and ports differ in slight detail, but are otherwise quite similar.  In general, they involve:
 
 1. Adding the custom Nif or Port to the `components` directory of the AtomVM source tree.
-1. Run `idf.py reconfigure` to pick up any menuconfig options, many extra drivers have an option to disable them (they are enabled by default). Optionally use `idf.py menuconfig` and confirm the driver is enabled and save when quitting.
+1. Run `idf.py set-target ${CHIP}` to pick up any menuconfig options, many extra drivers have an
+option to disable them (they are enabled by default). Optionally use `idf.py menuconfig` and
+confirm the driver is enabled and save when quitting.
 1. Building the AtomVM binary.
 
 ```{attention}
@@ -686,8 +782,9 @@ To add support for a new peripheral or protocol using an AtomVM port, you need t
   * `void <moniker>_init(GlobalContext *global);`
     * This function will be called once, when the application is started.
   * `Context *<moniker>_create_port(GlobalContext *global, term opts);`
-    * This function will be called to locate the Nif during a function call.
-    Example:
+    * This function is called when the `erlang:open_port/2` function is called with your
+    port name.  For example: `open_port({spawn, "my_port"}, []).`
+    * `<moniker>_init` and `<moniker>_create_port` function declarations:
 
     ```c
         void my_port_init(GlobalContext *global);
@@ -698,48 +795,30 @@ To add support for a new peripheral or protocol using an AtomVM port, you need t
     Instructions for implementing Ports is outside of the scope of this document.
     ```
 
-* Add the `REGISTER_PORT_COLLECTION` using the parameters `NAME`, `INIT_CB`, `DESTROY_CB`, `RESOLVE_NIF_CB` macro to the end of your nif code. Example:
+* Add the `REGISTER_PORT_DRIVER` using the parameters `NAME`, `INIT_CB`, `DESTROY_CB`, `CREATE_PORT_CB` macro to the end of your port code. Example:
 
     ```c
-        REGISTER_PORT_COLLECTION(my_port, my_port_init, NULL, my_port_create_port);
+        REGISTER_PORT_DRIVER(my_port, my_port_init, NULL, my_port_create_port);
     ```
 
 
 ## Building for STM32
 
+This section describes building AtomVM using the official ST HAL/LL SDK, which is downloaded automatically via CMake FetchContent. This platform supports STM32F2, STM32F4, STM32F7, STM32G0, STM32G4, STM32H5, STM32H7, STM32L4, STM32L5, STM32U3, STM32U5, and STM32WB families.
+
 ### STM32 Prerequisites
 
 The following software is required to build AtomVM for the STM32 platform:
 
-* [11.3 ARM toolchain](https://developer.arm.com/-/media/Files/downloads/gnu/11.3.rel1/binrel/arm-gnu-toolchain-11.3.rel1-x86_64-arm-none-eabi.tar.xz) (or compatible with your system)
-* [libopencm3](https://github.com/libopencm3/libopencm3.git) version 0.8.0
-* `cmake`
-* `make`
+* ARM toolchain (`arm-none-eabi-gcc`, e.g. 11.3 or later)
+* `cmake` (3.13 or later)
+* `meson`
+* `ninja`
 * `git`
-* `python`
 * Erlang/OTP `escript`
 
 ```{note}
-AtomVM tests this build on the latest Ubuntu github runner.
-```
-
-### Setup libopencm3
-
-Before building for the first time you need to have a compiled clone of the libopencm3 libraries, from inside the AtomVM/src/platforms/stm32 directory:
-
-```shell
-$ git clone -b v0.8.0 https://github.com/libopencm3/libopencm3.git
-$ cd libopencm3 && make -j4 && cd ..
-```
-
-```{tip}
-You can put libopencm3 wherever you want on your PC as long as you update LIBOPENCM3_DIR to point to it. This
-example assumes it has been cloned into /opt/libopencm3 and built. From inside the AtomVM/src/platforms/stm32
-directory:
-
-    $ cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/arm-toolchain.cmake \
-    -DLIBOPENCM3_DIR=/opt/libopencm3 ..
-
+No external SDK download is required. The STM32 HAL/LL drivers and CMSIS headers are fetched automatically by CMake during the build. AtomVM is built with `picolibc` which is also downloaded as part of the build and requires `meson` and `ninja`.
 ```
 
 ### Build AtomVM with cmake toolchain file
@@ -749,14 +828,39 @@ $ cd <atomvm-source-tree-root>
 $ cd src/platforms/stm32
 $ mkdir build
 $ cd build
-$ cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/arm-toolchain.cmake ..
-$ make
+$ cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=../cmake/arm-toolchain.cmake -DDEVICE=stm32f407vgt6 ..
+$ ninja
 ```
 
 ### Changing the target device
 
-The default build is based on the STM32F4Discovery board chip (`stm32f407vgt6`). If you want to target a different
-chip, pass the `-DDEVICE` flag when invoking cmake. For example, to use the BlackPill V2.0, pass `-DDEVICE=stm32f411ceu6`. At this time any `STM32F4` or `STM32F7` device with 512KB or more of on package flash should work with AtomVM. If an unsupported device is passed with the `DEVICE` parameter the configuration will fail. For devices with either 512KB or 768KB of flash the available application flash space will be limited to 128KB. Devices with only 512KB of flash may also suffer from slightly reduced performance because the compiler must optimize for size rather than performance.
+The default build targets the STM32F407 Discovery (`stm32f407vgt6`). Pass the `-DDEVICE` flag to select a different device. Supported families and example devices:
+
+| Family | Example Devices | Max Clock |
+|--------|----------------|-----------|
+| STM32F2 | `stm32f205rgt6`, `stm32f207zgt6` | 120 MHz |
+| STM32F4 | `stm32f407vgt6`, `stm32f429zit6`, `stm32f411ceu6`, `stm32f401ceu6` | 84-180 MHz |
+| STM32F7 | `stm32f746zgt6`, `stm32f767zit6` | 216 MHz |
+| STM32G0 | `stm32g0b1ret6` | 64 MHz |
+| STM32G4 | `stm32g474ret6`, `stm32g491ret6` | 170 MHz |
+| STM32H5 | `stm32h562rgt6` | 250 MHz |
+| STM32H7 | `stm32h743vit6`, `stm32h743zit6` | 480 MHz |
+| STM32L4 | `stm32l476rgt6`, `stm32l4r5zit6` | 80-120 MHz |
+| STM32L5 | `stm32l552ret6` | 110 MHz |
+| STM32U3 | `stm32u375rgt6`, `stm32u385rgt6` | 96 MHz |
+| STM32U5 | `stm32u585ait6q` | 160 MHz |
+| STM32WB | `stm32wb55rg` | 64 MHz |
+
+If an unsupported device is passed with the `DEVICE` parameter the configuration will fail.
+
+Example to build for a BlackPill (F411) board, which uses a 25 MHz HSE crystal:
+
+```shell
+$ cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=../cmake/arm-toolchain.cmake -DDEVICE=stm32f411ceu6 \
+  -DAVM_HSE_VALUE=25000000 ..
+```
+
+For devices with 512KB or less of flash, application flash space will be limited and the compiler optimizes for size rather than performance.
 
 ```{attention}
 For devices with only 512KB of flash the application address is different and must be adjusted when flashing your
@@ -766,7 +870,9 @@ devices is `0x8060000`.
 
 ### Configuring the Console
 
-The default build for any `DEVICE` will use `USART2` and output will be on `PA2`. This default will work well for most `Discovery` and generic boards that do not have an on-board TTL to USB-COM support (including the `stm32f411ceu6` A.K.A. `BlackPill V2.0`). For `Nucleo` boards that do have on board UART to USB-COM support you may pass the `cmake` parameter `-DBOARD=nucleo` to have the correct USART and TX pins configured automatically. The `Nucleo-144` series use `USART3` and `PD8`, while the supported `Nucleo-64` boards use `USART2`, but passing the `BOARD` parameter along with `DEVICE` will configure the correct `USART` for your model. If any other boards are discovered to have on board USB UART support pull requests, or opening issues with the details, are more than welcome.
+By default, stdout and stderr are printed on the configured console USART. Baudrate is 115200 and serial transmission is 8N1 with no flow control.
+
+The default console is `USART1` on `PA9`. For `Nucleo` boards, pass `-DBOARD=nucleo` to automatically select the correct USART for your board.
 
 Example to configure a `NUCLEO-F429ZI`:
 
@@ -777,16 +883,44 @@ $ cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/arm-toolchain.cmake -DDEVICE=stm32f429zi
 
 The AtomVM system console `USART` may also be configured to a specific uart peripheral. Pass one of the parameters from the chart below with the `cmake` option `-DAVM_CFG_CONSOLE=CONSOLE_#`, using the desired console parameter in place of `CONSOLE_#`. Not all UARTs are available on every supported board, but most will have several options that are not already used by other on board peripherals. Consult your data sheets for your device to select an appropriate console.
 
-| Parameter | USART | TX Pin | AtomVM Default | Nucleo-144 | Nucleo-64 |
-|-----------|-------|--------|----------------|------------|-----------|
-| `CONSOLE_1` | `USART1` | `PA9` |   |   |   |
-| `CONSOLE_2` | `USART2` | `PA2` | ✅ |   | ✅ |
+| Parameter | USART | TX Pin | Default | Nucleo-144 | Nucleo-64 |
+|-----------|-------|--------|---------|------------|-----------|
+| `CONSOLE_1` | `USART1` | `PA9` | ✅ |   |   |
+| `CONSOLE_2` | `USART2` | `PA2` |   |   | ✅ |
 | `CONSOLE_3` | `USART3` | `PD8` |   | ✅ |   |
 | `CONSOLE_4` | `UART4` | `PC10` |   |   |   |
 | `CONSOLE_5` | `UART5` | `PC12` |   |   |   |
 | `CONSOLE_6` | `USART6` | `PC6` |   |   |   |
-| `CONSOLE_7` | `UART7` | `PF7` |   |   |   |
-| `CONSOLE_8` | `UART8` | `PJ8` |   |   |   |
+
+### Configuring the HSE frequency
+
+The external oscillator (HSE) frequency varies between boards. Set it at build time with `-DAVM_HSE_VALUE=<freq_hz>`:
+
+```shell
+$ cmake -DCMAKE_TOOLCHAIN_FILE=../cmake/arm-toolchain.cmake -DDEVICE=stm32f411ceu6 \
+  -DAVM_HSE_VALUE=25000000 ..
+```
+
+Default HSE values per family (set in the family HAL configuration header):
+
+| Family | Default HSE | Typical Boards |
+|--------|-------------|----------------|
+| STM32F2 | 8 MHz | Nucleo boards |
+| STM32F4 | 8 MHz | Discovery/Nucleo boards (BlackPill boards use 25 MHz) |
+| STM32F7 | 8 MHz | Nucleo boards (ST-Link MCO bypass) |
+| STM32G0 | 8 MHz | |
+| STM32G4 | 8 MHz | Nucleo boards |
+| STM32H5 | 8 MHz | Nucleo boards (ST-Link MCO bypass), WeAct Studio H562 |
+| STM32H7 | 8 MHz | Nucleo boards (ST-Link MCO bypass), WeAct Studio H743 (25 MHz) |
+| STM32L4 | 8 MHz | Nucleo boards |
+| STM32L5 | N/A (uses MSI) | Nucleo boards |
+| STM32U3 | 16 MHz | Nucleo boards |
+| STM32U5 | 16 MHz | Nucleo-U585AI-Q, WeAct Studio U585 (25 MHz) |
+| STM32WB | 32 MHz | Nucleo-WB55, WeAct Studio WB55 (required for BLE radio) |
+
+```{note}
+Not all STM32 families have been tested on hardware. The F4, H5, H7, U5, and WB families have been tested on actual boards. The F2, F7, G0, G4, L4, L5, and U3 families are supported in the build system but have not yet been validated on hardware. If you encounter issues with an untested family, please open an [issue on GitHub](https://github.com/atomvm/AtomVM/issues).
+```
 
 ### Configure STM32 logging with `cmake`
 
@@ -803,17 +937,37 @@ For log entries colorized by log level pass `-DAVM_ENABLE_LOG_COLOR=on` to cmake
 
 By default only `ERROR` messages contain file and line number information. This can be included with all log entries by passing `-DAVM_ENABLE_LOG_LINES=on` to cmake, but it does incur a significant performance penalty and is only suggested for debugging during development.
 
-### Console Printing on STM32
+### Using local source checkouts for STM32 dependencies
 
-AtomVM is built with standard `newlib` to support `long long` integers (`signed` and `unsigned`). If you are building for a device with extremely limited flash space the `nano` version of `newlib` can be used instead. This may be done by passing `-DAVM_NEWLIB_NANO=on`. If the `nano newlib` is used logs will be automatically disabled, this is because many of the VM low level log messages will include `%ull` formatting and will cause buffer overflows and crash the VM if logging is not disabled for `nano newlib` builds. The total flash savings of using `nano newlib` and disabling logs is just under 40kB.
+By default, the STM32 build downloads picolibc and the STM32 SDK components (CMSIS headers and HAL/LL drivers) automatically. You can override this to use local checkouts by setting the following environment variables or CMake variables:
 
-By default, stdout and stderr are printed on USART2. On the STM32F4Discovery board, you can see them
-using a TTL-USB with the TX pin connected to board's pin PA2 (USART2 RX). Baudrate is 115200 and serial transmission
-is 8N1 with no flow control.
+| Variable | Description |
+|----------|-------------|
+| `PICOLIBC_PATH` | Path to a local [picolibc](https://github.com/picolibc/picolibc) source tree |
+| `STM32_CMSIS_CORE_PATH` | Path to a local [CMSIS Core](https://github.com/STMicroelectronics/cmsis_core) checkout |
+| `STM32_CMSIS_DEVICE_<FAMILY>_PATH` | Path to a local CMSIS Device checkout for the target family (e.g. `STM32_CMSIS_DEVICE_F4_PATH`) |
+| `STM32_HAL_DRIVER_<FAMILY>_PATH` | Path to a local HAL/LL driver checkout for the target family (e.g. `STM32_HAL_DRIVER_F4_PATH`) |
 
-```{seealso}
-If building for a different target USART may be configure as explained above in
-[Configuring the Console](#configuring-the-console).
+The `<FAMILY>` placeholder is the uppercase short family code: `F2`, `F4`, `F7`, `G0`, `G4`, `H5`, `H7`, `L4`, `L5`, `U3`, `U5`, or `WB`.
+
+Example using environment variables:
+
+```shell
+$ export PICOLIBC_PATH=/home/user/src/picolibc
+$ export STM32_CMSIS_CORE_PATH=/home/user/src/cmsis_core
+$ export STM32_CMSIS_DEVICE_F4_PATH=/home/user/src/cmsis_device_f4
+$ export STM32_HAL_DRIVER_F4_PATH=/home/user/src/stm32f4xx_hal_driver
+$ cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=../cmake/arm-toolchain.cmake -DDEVICE=stm32f407vgt6 ..
+```
+
+Alternatively, pass them as CMake variables with `-D`:
+
+```shell
+$ cmake -G Ninja -DCMAKE_TOOLCHAIN_FILE=../cmake/arm-toolchain.cmake -DDEVICE=stm32f407vgt6 \
+  -DPICOLIBC_PATH=/home/user/src/picolibc \
+  -DFETCHCONTENT_SOURCE_DIR_CMSIS_CORE=/home/user/src/cmsis_core \
+  -DFETCHCONTENT_SOURCE_DIR_CMSIS_DEVICE=/home/user/src/cmsis_device_f4 \
+  -DFETCHCONTENT_SOURCE_DIR_HAL_DRIVER=/home/user/src/stm32f4xx_hal_driver ..
 ```
 
 ### Configuring deployment builds for STM32

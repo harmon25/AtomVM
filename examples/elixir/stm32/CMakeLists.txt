@@ -22,4 +22,7 @@ project(examples_elixir_stm32)
 
 include(BuildElixir)
 
-pack_runnable(MultiBlink MultiBlink estdlib eavmlib exavmlib)
+# STM32 examples bundle runtime libs in the same AVM and targets are flash-constrained.
+set(AVM_PRUNE_RUNNABLES ON)
+
+pack_runnable(MultiBlink MultiBlink estdlib eavmlib exavmlib avm_stm32)

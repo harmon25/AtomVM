@@ -214,6 +214,7 @@ struct Test tests[] = {
     TEST_CASE_EXPECTED(prime_ext, 1999),
     TEST_CASE_EXPECTED(test_try_case_end, 256),
     TEST_CASE(test_exception_classes),
+    TEST_CASE(test_erlang_builtins),
     TEST_CASE_EXPECTED(test_recursion_and_try_catch, 3628800),
     TEST_CASE(test_fun_info),
     TEST_CASE_EXPECTED(test_func_info, 89),
@@ -328,6 +329,7 @@ struct Test tests[] = {
     TEST_CASE(test_split_binary),
     TEST_CASE(test_binary_replace),
     TEST_CASE(test_binary_match),
+    TEST_CASE(test_binary_longest_common_prefix),
 
     TEST_CASE(test_zlib_compress),
 
@@ -524,6 +526,12 @@ struct Test tests[] = {
     TEST_CASE_EXPECTED(test_list_to_tuple, 69),
 
     TEST_CASE(bs_context_byte_size),
+    TEST_CASE(bs_get_binary_fixed_size),
+    TEST_CASE(bs_get_integer_fixed_size),
+    TEST_CASE(bs_get_float_dynamic_size),
+    TEST_CASE(test_is_not_equal),
+    TEST_CASE(test_has_map_fields),
+    TEST_CASE(test_bs_create_bin_accum),
     TEST_CASE_EXPECTED(bs_context_to_binary_with_offset, 42),
     TEST_CASE_EXPECTED(bs_restore2_start_offset, 823),
 
@@ -557,6 +565,9 @@ struct Test tests[] = {
 
     TEST_CASE(test_op_bs_start_match),
     TEST_CASE(test_op_bs_create_bin),
+
+    TEST_CASE(test_multi_value_comprehension),
+    TEST_CASE(test_is_integer_3),
 
     TEST_CASE(test_code_server_nifs),
 
@@ -610,6 +621,19 @@ struct Test tests[] = {
     TEST_CASE(test_lists_member),
     TEST_CASE(test_lists_keymember),
     TEST_CASE(test_lists_keyfind),
+
+    TEST_CASE_COND(test_reraise, 0, SKIP_STACKTRACES),
+    TEST_CASE_COND(stacktrace_function_args, 0, SKIP_STACKTRACES),
+
+    TEST_CASE(test_inline_arith),
+
+    TEST_CASE(test_crypto_pk),
+    TEST_CASE(test_crypto_mac),
+    TEST_CASE(test_crypto_hash_update),
+    TEST_CASE(test_crypto_crypto),
+    TEST_CASE(test_crypto_aead),
+    TEST_CASE(test_crypto_pbkdf2_hmac),
+    TEST_CASE(test_crypto_misc),
 
     // TEST CRASHES HERE: TEST_CASE(memlimit),
 

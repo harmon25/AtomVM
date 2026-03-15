@@ -20,9 +20,7 @@
 
 -module(jit_aarch64_tests).
 
--ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--endif.
 
 -include("jit/include/jit.hrl").
 -include("jit/src/term.hrl").
@@ -49,7 +47,7 @@ call_primitive_0_test() ->
             "  14:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
             "  18:	a8c103fe 	ldp	x30, x0, [sp], #16\n"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_primitive_1_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -66,7 +64,7 @@ call_primitive_1_test() ->
             "  14:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
             "  18:	a8c103fe 	ldp	x30, x0, [sp], #16\n"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_primitive_2_args_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -86,7 +84,7 @@ call_primitive_2_args_test() ->
             "  20:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
             "  24:	a8c103fe 	ldp	x30, x0, [sp], #16"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_primitive_5_args_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -100,7 +98,7 @@ call_primitive_5_args_test() ->
             "   c:	d2800044 	mov	x4, #0x2                   	// #2\n"
             "  10:	d61f00e0 	br	x7"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_primitive_6_args_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -131,7 +129,7 @@ call_primitive_6_args_test() ->
             "  30:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
             "  34:	a8c103fe 	ldp	x30, x0, [sp], #16"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_primitive_extended_regs_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -169,11 +167,11 @@ call_primitive_extended_regs_test() ->
             "  48:	f9404850 	ldr	x16, [x2, #144]\n"
             "  4c:	a9bf03fe 	stp	x30, x0, [sp, #-16]!\n"
             "  50:	a9bf0be1 	stp	x1, x2, [sp, #-16]!\n"
-            "  54:	a9bf1fe8 	stp	x8, x7, [sp, #-16]!\n"
+            "  54:	a9bf23e7 	stp	x7, x8, [sp, #-16]!\n"
             "  58:	d2800261 	mov	x1, #0x13                  	// #19\n"
             "  5c:	d63f0200 	blr	x16\n"
             "  60:	aa0003e9 	mov	x9, x0\n"
-            "  64:	a8c11fe8 	ldp	x8, x7, [sp], #16\n"
+            "  64:	a8c123e7 	ldp	x7, x8, [sp], #16\n"
             "  68:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
             "  6c:	a8c103fe 	ldp	x30, x0, [sp], #16\n"
             "  70:	f9403450 	ldr	x16, [x2, #104]\n"
@@ -189,7 +187,7 @@ call_primitive_extended_regs_test() ->
             "  98:	a8c103fe 	ldp	x30, x0, [sp], #16\n"
             "  9c:	f9000127 	str	x7, [x9]\n"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_primitive_few_free_regs_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -213,8 +211,8 @@ call_primitive_few_free_regs_test() ->
         "  14:	f940e450 	ldr	x16, [x2, #456]\n"
         "  18:	a9bf03fe 	stp	x30, x0, [sp, #-16]!\n"
         "  1c:	a9bf0be1 	stp	x1, x2, [sp, #-16]!\n"
-        "  20:	a9bf23e9 	stp	x9, x8, [sp, #-16]!\n"
-        "  24:	f81f0fe7 	str	x7, [sp, #-16]!\n"
+        "  20:	a9bf23e7 	stp	x7, x8, [sp, #-16]!\n"
+        "  24:	f81f0fe9 	str	x9, [sp, #-16]!\n"
         "  28:	aa0803e0 	mov	x0, x8\n"
         "  2c:	aa0703e1 	mov	x1, x7\n"
         "  30:	aa0a03e2 	mov	x2, x10\n"
@@ -222,12 +220,12 @@ call_primitive_few_free_regs_test() ->
         "  38:	aa0b03e4 	mov	x4, x11\n"
         "  3c:	d63f0200 	blr	x16\n"
         "  40:	aa0003ea 	mov	x10, x0\n"
-        "  44:	f84107e7 	ldr	x7, [sp], #16\n"
-        "  48:	a8c123e9 	ldp	x9, x8, [sp], #16\n"
+        "  44:	f84107e9 	ldr	x9, [sp], #16\n"
+        "  48:	a8c123e7 	ldp	x7, x8, [sp], #16\n"
         "  4c:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
         "  50:	a8c103fe 	ldp	x30, x0, [sp], #16"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_ext_only_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -245,11 +243,11 @@ call_ext_only_test() ->
         "  1c:	d61f00e0 	br	x7\n"
         "  20:	f9401047 	ldr	x7, [x2, #32]\n"
         "  24:	d2800042 	mov	x2, #0x2                   	// #2\n"
-        "  28:	d2800043 	mov	x3, #0x2                   	// #2\n"
+        "  28:	aa0203e3 	mov	x3, x2\n"
         "  2c:	92800004 	mov	x4, #0xffffffffffffffff    	// #-1\n"
         "  30:	d61f00e0 	br	x7"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_primitive_last_5_args_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -266,7 +264,7 @@ call_primitive_last_5_args_test() ->
         "  10:	aa0703e4 	mov	x4, x7\n"
         "  14:	d61f0100 	br	x8"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_ext_last_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -284,11 +282,11 @@ call_ext_last_test() ->
         "  1c:	d61f00e0 	br	x7\n"
         "  20:	f9401047 	ldr	x7, [x2, #32]\n"
         "  24:	d2800042 	mov	x2, #0x2                   	// #2\n"
-        "  28:	d2800043 	mov	x3, #0x2                   	// #2\n"
+        "  28:	aa0203e3 	mov	x3, x2\n"
         "  2c:	d2800144 	mov	x4, #0xa                   	// #10\n"
         "  30:	d61f00e0 	br	x7"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_primitive_last_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -300,7 +298,7 @@ call_primitive_last_test() ->
             "   4:	d2800542 	mov	x2, #0x2a                  	// #42\n"
             "   8:	d61f00e0 	br	x7"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 return_if_not_equal_to_ctx_test_() ->
     {setup,
@@ -332,7 +330,7 @@ return_if_not_equal_to_ctx_test_() ->
                             "  24:	aa0703e0 	mov	x0, x7\n"
                             "  28:	d65f03c0 	ret"
                         >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 ?_test(begin
                     {State1, ResultReg} = ?BACKEND:call_primitive(
@@ -360,7 +358,7 @@ return_if_not_equal_to_ctx_test_() ->
                             "  28:	aa0803e0 	mov	x0, x8\n"
                             "  2c:	d65f03c0 	ret"
                         >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end)
             ]
         end}.
@@ -375,7 +373,7 @@ move_to_cp_test() ->
             "   4:	f94000e7 	ldr	x7, [x7]\n"
             "   8:	f9005c07 	str	x7, [x0, #184]"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 increment_sp_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -387,7 +385,7 @@ increment_sp_test() ->
             "   4:	9100e0e7 	add	x7, x7, #0x38\n"
             "   8:	f9001407 	str	x7, [x0, #40]"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 if_block_test_() ->
     {setup,
@@ -414,8 +412,8 @@ if_block_test_() ->
                         "   8:	b6f80047 	tbz	x7, #63, 0x10\n"
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -433,8 +431,8 @@ if_block_test_() ->
                         "   c:	5400004a 	b.ge	0x14  // b.tcont\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -451,8 +449,8 @@ if_block_test_() ->
                         "   8:	b5000047 	cbnz	x7, 0x10\n"
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -469,7 +467,7 @@ if_block_test_() ->
                         "   8:	b5000047 	cbnz	x7, 0x10\n"
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -487,8 +485,8 @@ if_block_test_() ->
                         "   8:	35000047 	cbnz	w7, 0x10\n"
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -505,7 +503,7 @@ if_block_test_() ->
                         "   8:	35000047 	cbnz	w7, 0x10\n"
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -524,8 +522,8 @@ if_block_test_() ->
                         "   c:	54000040 	b.eq	0x14  // b.none\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -543,7 +541,7 @@ if_block_test_() ->
                         "   c:	54000040 	b.eq	0x14  // b.none\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -562,8 +560,8 @@ if_block_test_() ->
                         "   c:	54000040 	b.eq	0x14  // b.none\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -581,7 +579,7 @@ if_block_test_() ->
                         "   c:	54000040 	b.eq	0x14  // b.none\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -600,8 +598,8 @@ if_block_test_() ->
                         "   c:	54000041 	b.ne	0x14  // b.any\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -619,7 +617,7 @@ if_block_test_() ->
                         "   c:	54000041 	b.ne	0x14  // b.any\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -638,8 +636,8 @@ if_block_test_() ->
                         "   c:	54000041 	b.ne	0x14  // b.any\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -657,7 +655,7 @@ if_block_test_() ->
                         "   c:	54000041 	b.ne	0x14  // b.any\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -675,8 +673,8 @@ if_block_test_() ->
                         "   8:	37000047 	tbnz	w7, #0, 0x10\n"
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -693,7 +691,7 @@ if_block_test_() ->
                         "   8:	37000047 	tbnz	w7, #0, 0x10\n"
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -711,8 +709,8 @@ if_block_test_() ->
                         "   8:	36000047 	tbz	w7, #0, 0x10\n"
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -729,7 +727,7 @@ if_block_test_() ->
                         "   8:	36000047 	tbz	w7, #0, 0x10\n"
                         "   c:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -748,8 +746,8 @@ if_block_test_() ->
                         "   c:	54000040 	b.eq	0x14  // b.none\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -768,8 +766,8 @@ if_block_test_() ->
                         "  10:	54000040 	b.eq	0x18  // b.none\n"
                         "  14:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -787,7 +785,7 @@ if_block_test_() ->
                         "   c:	54000040 	b.eq	0x14  // b.none\n"
                         "  10:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
@@ -807,8 +805,8 @@ if_block_test_() ->
                         "  10:	54000040 	b.eq	0x18  // b.none\n"
                         "  14:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
-                    ?assertEqual([RegB, RegA], ?BACKEND:used_regs(State1))
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
                 end),
                 ?_test(begin
                     State1 = ?BACKEND:if_block(
@@ -827,7 +825,83 @@ if_block_test_() ->
                         "  10:	54000040 	b.eq	0x18  // b.none\n"
                         "  14:	91000908 	add	x8, x8, #0x2"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegB], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {100, '<', RegA},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	f9401807 	ldr	x7, [x0, #48]\n"
+                        "   4:	f9401c08 	ldr	x8, [x0, #56]\n"
+                        "   8:	f10190ff 	cmp	x7, #0x64\n"
+                        "   c:	5400004d 	b.le	0x14\n"
+                        "  10:	91000908 	add	x8, x8, #0x2"
+                    >>,
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {100, '<', {free, RegA}},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	f9401807 	ldr	x7, [x0, #48]\n"
+                        "   4:	f9401c08 	ldr	x8, [x0, #56]\n"
+                        "   8:	f10190ff 	cmp	x7, #0x64\n"
+                        "   c:	5400004d 	b.le	0x14\n"
+                        "  10:	91000908 	add	x8, x8, #0x2"
+                    >>,
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegB], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {RegA, '<', 100},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	f9401807 	ldr	x7, [x0, #48]\n"
+                        "   4:	f9401c08 	ldr	x8, [x0, #56]\n"
+                        "   8:	f10190ff 	cmp	x7, #0x64\n"
+                        "   c:	5400004a 	b.ge	0x14  // b.tcont\n"
+                        "  10:	91000908 	add	x8, x8, #0x2"
+                    >>,
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
+                    ?assertEqual([RegA, RegB], ?BACKEND:used_regs(State1))
+                end),
+                ?_test(begin
+                    State1 = ?BACKEND:if_block(
+                        State0,
+                        {{free, RegA}, '<', 100},
+                        fun(BSt0) ->
+                            ?BACKEND:add(BSt0, RegB, 2)
+                        end
+                    ),
+                    Stream = ?BACKEND:stream(State1),
+                    Dump = <<
+                        "   0:	f9401807 	ldr	x7, [x0, #48]\n"
+                        "   4:	f9401c08 	ldr	x8, [x0, #56]\n"
+                        "   8:	f10190ff 	cmp	x7, #0x64\n"
+                        "   c:	5400004a 	b.ge	0x14  // b.tcont\n"
+                        "  10:	91000908 	add	x8, x8, #0x2"
+                    >>,
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual([RegB], ?BACKEND:used_regs(State1))
                 end)
             ]
@@ -858,7 +932,7 @@ if_else_block_test() ->
             "  14:	14000002 	b	0x1c\n"
             "  18:	91001108 	add	x8, x8, #0x4"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 shift_right_test_() ->
     [
@@ -872,7 +946,7 @@ shift_right_test_() ->
                     "   0:	f9401807 	ldr	x7, [x0, #48]\n"
                     "   4:	d343fce7 	lsr	x7, x7, #3"
                 >>,
-            ?assertEqual(dump_to_bin(Dump), Stream)
+            jit_tests_common:assert_stream(aarch64, Dump, Stream)
         end),
         ?_test(begin
             State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -885,7 +959,7 @@ shift_right_test_() ->
                     "   0:	f9401807 	ldr	x7, [x0, #48]\n"
                     "   4:	d343fce8 	lsr	x8, x7, #3"
                 >>,
-            ?assertEqual(dump_to_bin(Dump), Stream)
+            jit_tests_common:assert_stream(aarch64, Dump, Stream)
         end)
     ].
 
@@ -899,7 +973,7 @@ shift_left_test() ->
             "   0:	f9401807 	ldr	x7, [x0, #48]\n"
             "   4:	d37df0e7 	lsl	x7, x7, #3"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_only_or_schedule_next_and_label_relocation_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -931,7 +1005,39 @@ call_only_or_schedule_next_and_label_relocation_test() ->
             "  34:	f9400447 	ldr	x7, [x2, #8]\n"
             "  38:	d61f00e0 	br	x7"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
+
+call_only_or_schedule_next_known_label_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    State1 = ?BACKEND:jump_table(State0, 2),
+    State2 = ?BACKEND:add_label(State1, 1),
+    State3 = ?BACKEND:add_label(State2, 2, 16#2c),
+    State4 = ?BACKEND:call_only_or_schedule_next(State3, 2),
+    State5 = ?BACKEND:call_primitive_last(State4, 0, [ctx, jit_state]),
+    % OP_INT_CALL_END
+    State6 = ?BACKEND:add_label(State5, 0),
+    State7 = ?BACKEND:call_primitive_last(State6, 1, [ctx, jit_state]),
+    State8 = ?BACKEND:update_branches(State7),
+    Stream = ?BACKEND:stream(State8),
+    Dump =
+        <<
+            "   0:	1400000d 	b	0x34\n"
+            "   4:	14000002 	b	0xc\n"
+            "   8:	14000009 	b	0x2c\n"
+            "   c:	b9401027 	ldr	w7, [x1, #16]\n"
+            "  10:	f10004e7 	subs	x7, x7, #0x1\n"
+            "  14:	b9001027 	str	w7, [x1, #16]\n"
+            "  18:	540000a1 	b.ne	0x2c  // b.any\n"
+            "  1c:	10000087 	adr	x7, 0x2c\n"
+            "  20:	f9000427 	str	x7, [x1, #8]\n"
+            "  24:	f9400847 	ldr	x7, [x2, #16]\n"
+            "  28:	d61f00e0 	br	x7\n"
+            "  2c:	f9400047 	ldr	x7, [x2]\n"
+            "  30:	d61f00e0 	br	x7\n"
+            "  34:	f9400447 	ldr	x7, [x2, #8]\n"
+            "  38:	d61f00e0 	br	x7"
+        >>,
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_bif_with_large_literal_integer_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -987,7 +1093,7 @@ call_bif_with_large_literal_integer_test() ->
             "  8c:	d61f00e0 	br	x7\n"
             "  90:	f9001807 	str	x7, [x0, #48]"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 get_list_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -1008,7 +1114,7 @@ get_list_test() ->
         "  18:	f94000e9 	ldr	x9, [x7]\n"
         "  1c:	f9000109 	str	x9, [x8]"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 is_integer_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -1047,7 +1153,7 @@ is_integer_test() ->
     State6 = ?BACKEND:update_branches(State5),
     Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:	14000000 	b	0x0\n"
+        "   0:	14000001 	b	0x4\n"
         "   4:	14000050 	b	0x144\n"
         "   8:	f9401807 	ldr	x7, [x0, #48]\n"
         "   c:	92400ce8 	and	x8, x7, #0xf\n"
@@ -1065,7 +1171,7 @@ is_integer_test() ->
         "  3c:	54000040 	b.eq	0x44  // b.none\n"
         "  40:	14000041 	b	0x144"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 cond_jump_to_label(Cond, Label, MMod, MSt0) ->
     MMod:if_block(MSt0, Cond, fun(BSt0) ->
@@ -1103,7 +1209,7 @@ is_number_test() ->
     State6 = ?BACKEND:update_branches(State5),
     Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:	14000000 	b	0x0\n"
+        "   0:	14000001 	b	0x4\n"
         "   4:	14000053 	b	0x150\n"
         "   8:	f9401807 	ldr	x7, [x0, #48]\n"
         "   c:	92400ce8 	and	x8, x7, #0xf\n"
@@ -1124,7 +1230,7 @@ is_number_test() ->
         "  48:	54000040 	b.eq	0x50  // b.none\n"
         "  4c:	14000041 	b	0x150"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 is_boolean_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -1143,7 +1249,7 @@ is_boolean_test() ->
     State6 = ?BACKEND:update_branches(State5),
     Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:	14000000 	b	0x0\n"
+        "   0:	14000001 	b	0x4\n"
         "   4:	14000047 	b	0x120\n"
         "   8:	f9401807 	ldr	x7, [x0, #48]\n"
         "   c:	f1012cff 	cmp	x7, #0x4b\n"
@@ -1152,7 +1258,7 @@ is_boolean_test() ->
         "  18:	54000040 	b.eq	0x20\n"
         "  1c:	14000041 	b	0x120"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 %% Test OP_WAIT_TIMEOUT pattern
 wait_timeout_test() ->
@@ -1212,7 +1318,7 @@ wait_timeout_test() ->
         "  70:	d2800542 	mov	x2, #0x2a                  	// #42\n"
         "  74:	d61f00e0 	br	x7"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 %% Test OP_WAIT pattern that uses set_continuation_to_label
 wait_test() ->
@@ -1223,21 +1329,50 @@ wait_test() ->
     Label = 2,
     State3 = ?BACKEND:set_continuation_to_label(State2, Label),
     State4 = ?BACKEND:call_primitive_last(State3, ?PRIM_SCHEDULE_WAIT_CP, [ctx, jit_state]),
+    State5 = ?BACKEND:add_label(State4, Label, 16#100),
+    State6 = ?BACKEND:update_branches(State5),
 
-    Stream = ?BACKEND:stream(State4),
+    Stream = ?BACKEND:stream(State6),
     Dump = <<
-        "   0:	14000000 	b	0x0\n"
+        "   0:	14000001 	b	0x4\n"
         "   4:	14000005 	b	0x18\n"
-        "   8:	14000000 	b	0x8\n"
-        "   c:	14000000 	b	0xc\n"
-        "  10:	14000000 	b	0x10\n"
-        "  14:	14000000 	b	0x14\n"
-        "  18:	10000007 	adr	x7, 0x18\n"
+        "   8:	1400003e 	b	0x100\n"
+        "   c:	14000001 	b	0x10\n"
+        "  10:	14000001 	b	0x14\n"
+        "  14:	14000001 	b	0x18\n"
+        "  18:	10000747 	adr	x7, 0x100\n"
         "  1c:	f9000427 	str	x7, [x1, #8]\n"
         "  20:	f9407447 	ldr	x7, [x2, #232]\n"
         "  24:	d61f00e0 	br	x7"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
+
+%% Test set_continuation_to_label with known label
+wait_known_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+
+    State1 = ?BACKEND:jump_table(State0, 5),
+    State2 = ?BACKEND:add_label(State1, 1),
+    Label = 2,
+    State3 = ?BACKEND:add_label(State2, Label, 16#100),
+    State4 = ?BACKEND:set_continuation_to_label(State3, Label),
+    State5 = ?BACKEND:call_primitive_last(State4, ?PRIM_SCHEDULE_WAIT_CP, [ctx, jit_state]),
+    State6 = ?BACKEND:update_branches(State5),
+
+    Stream = ?BACKEND:stream(State6),
+    Dump = <<
+        "   0:	14000001 	b	0x4\n"
+        "   4:	14000005 	b	0x18\n"
+        "   8:	1400003e 	b	0x100\n"
+        "   c:	14000001 	b	0x10\n"
+        "  10:	14000001 	b	0x14\n"
+        "  14:	14000001 	b	0x18\n"
+        "  18:	10000747 	adr	x7, 0x100\n"
+        "  1c:	f9000427 	str	x7, [x1, #8]\n"
+        "  20:	f9407447 	ldr	x7, [x2, #232]\n"
+        "  24:	d61f00e0 	br	x7"
+    >>,
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 return_labels_and_lines_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -1259,7 +1394,7 @@ return_labels_and_lines_test() ->
     Dump = <<
         "   0:	14000003 	b	0xc\n"
         "   4:	14000003 	b	0x10\n"
-        "   8:	14000000 	b	0x8\n"
+        "   8:	14000001 	b	0xc\n"
         "   c:	10000040 	adr	x0, 0x14\n"
         "  10:	d65f03c0 	ret\n"
         "  14:	00000200 	.inst	0x00000200\n"
@@ -1270,7 +1405,7 @@ return_labels_and_lines_test() ->
         "  28:	14001000 	b	0x4028\n"
         "  2c:	20000000 	.inst	0x20000000"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 %% Test call_primitive with {free, {x_reg, X}}
 gc_bif2_test() ->
@@ -1303,7 +1438,7 @@ gc_bif2_test() ->
         "  48:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
         "  4c:	a8c103fe 	ldp	x30, x0, [sp], #16"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 %% Test case where parameter value is in r1
 memory_ensure_free_with_roots_test() ->
@@ -1325,7 +1460,7 @@ memory_ensure_free_with_roots_test() ->
         "  20:	a8c10be1 	ldp	x1, x2, [sp], #16\n"
         "  24:	a8c103fe 	ldp	x30, x0, [sp], #16"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_ext_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -1354,7 +1489,7 @@ call_ext_test() ->
         "  44:	92800004 	mov	x4, #0xffffffffffffffff    	// #-1\n"
         "  48:	d61f00e0 	br	x7"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 call_fun_test() ->
     State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
@@ -1425,12 +1560,12 @@ call_fun_test() ->
         "  90:	d2800003 	mov	x3, #0x0                   	// #0\n"
         "  94:	d61f0100 	br	x8"
     >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 move_to_vm_register_test0(State, Source, Dest, Dump) ->
     State1 = ?BACKEND:move_to_vm_register(State, Source, Dest),
     Stream = ?BACKEND:stream(State1),
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 move_to_vm_register_test_() ->
     {setup,
@@ -1654,7 +1789,7 @@ move_to_vm_register_test_() ->
                         "   8:	f9406008 	ldr	x8, [x0, #192]\n"
                         "   c:	f9000d07 	str	x7, [x8, #24]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end)
             ]
         end}.
@@ -1662,7 +1797,7 @@ move_to_vm_register_test_() ->
 move_array_element_test0(State, Reg, Index, Dest, Dump) ->
     State1 = ?BACKEND:move_array_element(State, Reg, Index, Dest),
     Stream = ?BACKEND:stream(State1),
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 move_array_element_test_() ->
     {setup,
@@ -1759,7 +1894,7 @@ get_array_element_test_() ->
                     Dump = <<
                         "   0:	f9401107 	ldr	x7, [x8, #32]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream),
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream),
                     ?assertEqual(r7, Reg)
                 end)
             ]
@@ -1780,7 +1915,7 @@ move_to_array_element_test_() ->
                         "   0:	f9401807 	ldr	x7, [x0, #48]\n"
                         "   4:	f9000907 	str	x7, [x8, #16]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_array_element/4: x_reg to reg[reg]
                 ?_test(begin
@@ -1790,7 +1925,7 @@ move_to_array_element_test_() ->
                         "  0:	f9401807 	ldr	x7, [x0, #48]\n"
                         "   4:	f8297907 	str	x7, [x8, x9, lsl #3]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_array_element/4: ptr to reg[reg]
                 ?_test(begin
@@ -1800,7 +1935,7 @@ move_to_array_element_test_() ->
                         "   0:	f94000e7 	ldr	x7, [x7]\n"
                         "   4:	f8297907 	str	x7, [x8, x9, lsl #3]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_array_element/4: y_reg to reg[reg]
                 ?_test(begin
@@ -1811,7 +1946,7 @@ move_to_array_element_test_() ->
                         "   4:	f94008e7 	ldr	x7, [x7, #16]\n"
                         "   8:	f8297907 	str	x7, [x8, x9, lsl #3]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_array_element/5: x_reg to reg[x+offset]
                 ?_test(begin
@@ -1821,12 +1956,14 @@ move_to_array_element_test_() ->
                         "   0:	f9401807 	ldr	x7, [x0, #48]\n"
                         "   4:	f9000d07 	str	x7, [x8, #24]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_array_element/5: x_reg to reg[x+offset]
                 ?_test(begin
-                    State1 = setelement(7, State0, ?BACKEND:available_regs(State0) -- [r8, r9]),
-                    State2 = setelement(8, State1, [r8, r9]),
+                    State1 = setelement(
+                        7, State0, element(7, State0) band (bnot ((1 bsl 8) bor (1 bsl 9)))
+                    ),
+                    State2 = setelement(8, State1, (1 bsl 8) bor (1 bsl 9)),
                     [r8, r9] = ?BACKEND:used_regs(State2),
                     State3 = ?BACKEND:move_to_array_element(State2, {x_reg, 0}, r8, r9, 1),
                     Stream = ?BACKEND:stream(State3),
@@ -1835,12 +1972,14 @@ move_to_array_element_test_() ->
                         "   4:	9100052a 	add	x10, x9, #0x1\n"
                         "   8:	f82a7907 	str	x7, [x8, x10, lsl #3]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_array_element/5: imm to reg[x+offset]
                 ?_test(begin
-                    State1 = setelement(7, State0, ?BACKEND:available_regs(State0) -- [r8, r9]),
-                    State2 = setelement(8, State1, [r8, r9]),
+                    State1 = setelement(
+                        7, State0, element(7, State0) band (bnot ((1 bsl 8) bor (1 bsl 9)))
+                    ),
+                    State2 = setelement(8, State1, (1 bsl 8) bor (1 bsl 9)),
                     [r8, r9] = ?BACKEND:used_regs(State2),
                     State3 = ?BACKEND:move_to_array_element(State2, 42, r8, r9, 1),
                     Stream = ?BACKEND:stream(State3),
@@ -1849,7 +1988,7 @@ move_to_array_element_test_() ->
                         "   4:	9100052a 	add	x10, x9, #0x1\n"
                         "   8:	f82a7907 	str	x7, [x8, x10, lsl #3]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end)
             ]
         end}.
@@ -1869,7 +2008,7 @@ move_to_native_register_test_() ->
                     Dump = <<
                         "   0:	d2800547 	mov	x7, #0x2a                  	// #42"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_native_register/2: {ptr, reg}
                 ?_test(begin
@@ -1879,7 +2018,7 @@ move_to_native_register_test_() ->
                     Dump = <<
                         "   0:	f94000c6 	ldr	x6, [x6]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_native_register/2: {x_reg, N}
                 ?_test(begin
@@ -1889,7 +2028,7 @@ move_to_native_register_test_() ->
                     Dump = <<
                         "   0:	f9402407 	ldr	x7, [x0, #72]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_native_register/2: {y_reg, N}
                 ?_test(begin
@@ -1900,7 +2039,7 @@ move_to_native_register_test_() ->
                         "   0:	f9401407 	ldr	x7, [x0, #40]\n"
                         "   4:	f9400ce7 	ldr	x7, [x7, #24]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_native_register/3: imm to reg
                 ?_test(begin
@@ -1909,7 +2048,7 @@ move_to_native_register_test_() ->
                     Dump = <<
                         "   0:	d2800548 	mov	x8, #0x2a                  	// #42"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_native_register/3: reg to reg
                 ?_test(begin
@@ -1918,7 +2057,7 @@ move_to_native_register_test_() ->
                     Dump = <<
                         "   0:	aa0703e8 	mov	x8, x7"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_native_register/3: {ptr, reg} to reg
                 ?_test(begin
@@ -1927,7 +2066,7 @@ move_to_native_register_test_() ->
                     Dump = <<
                         "   0:	f94000e8 	ldr	x8, [x7]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_native_register/3: {x_reg, x} to reg[reg]
                 ?_test(begin
@@ -1936,7 +2075,7 @@ move_to_native_register_test_() ->
                     Dump = <<
                         "   0:	f9402008 	ldr	x8, [x0, #64]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end),
                 %% move_to_native_register/3: {y_reg, y} to reg[reg]
                 ?_test(begin
@@ -1946,7 +2085,7 @@ move_to_native_register_test_() ->
                         "   0:	f9401408 	ldr	x8, [x0, #40]\n"
                         "   4:	f9400908 	ldr	x8, [x8, #16]"
                     >>,
-                    ?assertEqual(dump_to_bin(Dump), Stream)
+                    jit_tests_common:assert_stream(aarch64, Dump, Stream)
                 end)
             ]
         end}.
@@ -1954,7 +2093,7 @@ move_to_native_register_test_() ->
 add_test0(State0, Reg, Imm, Dump) ->
     State1 = ?BACKEND:add(State0, Reg, Imm),
     Stream = ?BACKEND:stream(State1),
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 add_test_() ->
     {setup,
@@ -1984,7 +2123,7 @@ add_test_() ->
 sub_test0(State0, Reg, Imm, Dump) ->
     State1 = ?BACKEND:sub(State0, Reg, Imm),
     Stream = ?BACKEND:stream(State1),
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 sub_test_() ->
     {setup,
@@ -2014,7 +2153,7 @@ sub_test_() ->
 mul_test0(State0, Reg, Imm, Dump) ->
     State1 = ?BACKEND:mul(State0, Reg, Imm),
     Stream = ?BACKEND:stream(State1),
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
 mul_test_() ->
     {setup,
@@ -2098,48 +2237,17 @@ jump_to_continuation_test() ->
             "   4:	8b0000e7 	add	x7, x7, x0\n"
             "   8:	d61f00e0 	br	x7"
         >>,
-    ?assertEqual(dump_to_bin(Dump), Stream).
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).
 
-dump_to_bin(Dump) ->
-    dump_to_bin0(Dump, addr, []).
-
--define(IS_HEX_DIGIT(C),
-    ((C >= $0 andalso C =< $9) orelse (C >= $a andalso C =< $f) orelse (C >= $A andalso C =< $F))
-).
-
-dump_to_bin0(<<N, $:, Tail/binary>>, addr, Acc) when ?IS_HEX_DIGIT(N) ->
-    dump_to_bin0(Tail, hex, Acc);
-dump_to_bin0(<<N, Tail/binary>>, addr, Acc) when ?IS_HEX_DIGIT(N) ->
-    dump_to_bin0(Tail, addr, Acc);
-dump_to_bin0(<<$\n, Tail/binary>>, addr, Acc) ->
-    dump_to_bin0(Tail, addr, Acc);
-dump_to_bin0(<<$\s, Tail/binary>>, addr, Acc) ->
-    dump_to_bin0(Tail, addr, Acc);
-dump_to_bin0(<<$\t, Tail/binary>>, addr, Acc) ->
-    dump_to_bin0(Tail, addr, Acc);
-dump_to_bin0(<<$\s, Tail/binary>>, hex, Acc) ->
-    dump_to_bin0(Tail, hex, Acc);
-dump_to_bin0(<<$\t, Tail/binary>>, hex, Acc) ->
-    dump_to_bin0(Tail, hex, Acc);
-dump_to_bin0(<<H1, H2, H3, H4, H5, H6, H7, H8, Sp, Rest/binary>>, hex, Acc) when
-    (Sp =:= $\t orelse Sp =:= $\s) andalso
-        ?IS_HEX_DIGIT(H1) andalso
-        ?IS_HEX_DIGIT(H2) andalso
-        ?IS_HEX_DIGIT(H3) andalso
-        ?IS_HEX_DIGIT(H4) andalso
-        ?IS_HEX_DIGIT(H5) andalso
-        ?IS_HEX_DIGIT(H6) andalso
-        ?IS_HEX_DIGIT(H7) andalso
-        ?IS_HEX_DIGIT(H8)
-->
-    %% Parse 8 hex digits (AArch64 32-bit instruction)
-    Instr = list_to_integer([H1, H2, H3, H4, H5, H6, H7, H8], 16),
-    dump_to_bin0(Rest, instr, [<<Instr:32/little>> | Acc]);
-dump_to_bin0(<<$\n, Tail/binary>>, hex, Acc) ->
-    dump_to_bin0(Tail, addr, Acc);
-dump_to_bin0(<<$\n, Tail/binary>>, instr, Acc) ->
-    dump_to_bin0(Tail, addr, Acc);
-dump_to_bin0(<<_Other, Tail/binary>>, instr, Acc) ->
-    dump_to_bin0(Tail, instr, Acc);
-dump_to_bin0(<<>>, _, Acc) ->
-    list_to_binary(lists:reverse(Acc)).
+%% After freeing a register, cache is preserved so reload is elided
+cached_load_after_free_test() ->
+    State0 = ?BACKEND:new(?JIT_VARIANT_PIC, jit_stream_binary, jit_stream_binary:new(0)),
+    {State1, r7} = ?BACKEND:move_to_native_register(State0, {x_reg, 0}),
+    State2 = ?BACKEND:free_native_registers(State1, [r7]),
+    {State3, r7} = ?BACKEND:move_to_native_register(State2, {x_reg, 0}),
+    Stream = ?BACKEND:stream(State3),
+    Dump =
+        <<
+            "   0:	f9401807 	ldr	x7, [x0, #48]"
+        >>,
+    jit_tests_common:assert_stream(aarch64, Dump, Stream).

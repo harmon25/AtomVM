@@ -29,7 +29,7 @@ endif()
 ExternalProject_Add(HostAtomVM
     SOURCE_DIR ../../../../../../../../
     INSTALL_COMMAND cmake -E echo "Skipping install step."
-    BUILD_COMMAND cmake --build . --target=atomvmlib ${host_atomvm_jit_target} --target=PackBEAM
+    BUILD_COMMAND cmake --build . --target=atomvmlib-esp32 ${host_atomvm_jit_target} --target=PackBEAM
 )
 
 macro(jit_precompile module_name)
@@ -62,6 +62,7 @@ compile_erlang(test_esp_partition)
 compile_erlang(test_esp_timer_get_time)
 compile_erlang(test_file)
 compile_erlang(test_wifi_example)
+compile_erlang(test_wifi_managed)
 compile_erlang(test_list_to_atom)
 compile_erlang(test_list_to_binary)
 compile_erlang(test_md5)
@@ -83,6 +84,7 @@ set(erlang_test_beams
     test_esp_timer_get_time.beam
     test_file.beam
     test_wifi_example.beam
+    test_wifi_managed.beam
     test_list_to_atom.beam
     test_list_to_binary.beam
     test_md5.beam
@@ -112,8 +114,8 @@ endif()
 
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/esp32_test_modules.avm"
-    COMMAND HostAtomVM-prefix/src/HostAtomVM-build/tools/packbeam/PackBEAM -i esp32_test_modules.avm
-        HostAtomVM-prefix/src/HostAtomVM-build/libs/atomvmlib.avm
+    COMMAND HostAtomVM-prefix/src/HostAtomVM-build/tools/packbeam/packbeam create esp32_test_modules.avm
+        HostAtomVM-prefix/src/HostAtomVM-build/libs/atomvmlib-esp32.avm
         ${erlang_test_beams_to_package}
     DEPENDS
         HostAtomVM

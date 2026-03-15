@@ -63,23 +63,46 @@ extern "C" {
 #ifdef IMPL_EXECUTE_LOOP
 
 #if AVM_NO_JIT
-#define SET_ERROR(error_type_atom)                                      \
-    x_regs[0] = ERROR_ATOM;                                             \
-    x_regs[1] = error_type_atom;                                        \
-    x_regs[2] = stacktrace_create_raw(ctx, mod, pc - code, ERROR_ATOM);
+#define SET_ERROR(error_type_atom)                \
+    context_set_exception_class(ctx, ERROR_ATOM); \
+    ctx->exception_reason = error_type_atom;      \
+    ctx->exception_stacktrace = stacktrace_create_raw(ctx, mod, pc - code);
 #elif AVM_NO_EMU
-#define SET_ERROR(error_type_atom)                                      \
-    x_regs[0] = ERROR_ATOM;                                             \
-    x_regs[1] = error_type_atom;                                        \
-    x_regs[2] = stacktrace_create_raw(ctx, mod, (const uint8_t *) native_pc - (const uint8_t *) mod->native_code, ERROR_ATOM);
+#define SET_ERROR(error_type_atom)                \
+    context_set_exception_class(ctx, ERROR_ATOM); \
+    ctx->exception_reason = error_type_atom;      \
+    ctx->exception_stacktrace = stacktrace_create_raw(ctx, mod, (const uint8_t *) native_pc - (const uint8_t *) mod->native_code);
 #else
-#define SET_ERROR(error_type_atom)                                      \
-    x_regs[0] = ERROR_ATOM;                                             \
-    x_regs[1] = error_type_atom;                                        \
-    if (mod->native_code) {                                             \
-        x_regs[2] = stacktrace_create_raw(ctx, mod, (const uint8_t *) native_pc - (const uint8_t *) mod->native_code, ERROR_ATOM); \
-    } else {                                                            \
-        x_regs[2] = stacktrace_create_raw(ctx, mod, pc - code, ERROR_ATOM); \
+#define SET_ERROR(error_type_atom)                                                          \
+    context_set_exception_class(ctx, ERROR_ATOM);                                           \
+    ctx->exception_reason = error_type_atom;                                                \
+    if (mod->native_code) {                                                                 \
+        ctx->exception_stacktrace = stacktrace_create_raw(ctx, mod,                         \
+            (const uint8_t *) native_pc - (const uint8_t *) mod->native_code);  \
+    } else {                                                                                \
+        ctx->exception_stacktrace = stacktrace_create_raw(ctx, mod, pc - code); \
+    }
+#endif
+
+#if AVM_NO_JIT
+#define SET_ERROR_MFA(error_type_atom, m, f, a)                 \
+    context_set_exception_class_use_live_flag(ctx, ERROR_ATOM); \
+    ctx->exception_reason = error_type_atom;                    \
+    ctx->exception_stacktrace = stacktrace_create_raw_mfa(ctx, mod, pc - code, m, f, a);
+#elif AVM_NO_EMU
+#define SET_ERROR_MFA(error_type_atom, m, f, a)                 \
+    context_set_exception_class_use_live_flag(ctx, ERROR_ATOM); \
+    ctx->exception_reason = error_type_atom;                    \
+    ctx->exception_stacktrace = stacktrace_create_raw_mfa(ctx, mod, (const uint8_t *) native_pc - (const uint8_t *) mod->native_code, m, f, a);
+#else
+#define SET_ERROR_MFA(error_type_atom, m, f, a)                                                          \
+    context_set_exception_class_use_live_flag(ctx, ERROR_ATOM);                                          \
+    ctx->exception_reason = error_type_atom;                                                             \
+    if (mod->native_code) {                                                                              \
+        ctx->exception_stacktrace = stacktrace_create_raw_mfa(ctx, mod,                                  \
+            (const uint8_t *) native_pc - (const uint8_t *) mod->native_code, m, f, a);                  \
+    } else {                                                                                             \
+        ctx->exception_stacktrace = stacktrace_create_raw_mfa(ctx, mod, pc - code, m, f, a);             \
     }
 #endif
 
@@ -89,6 +112,10 @@ extern "C" {
 #endif
 #define RAISE_ERROR(error_type_atom) \
     SET_ERROR(error_type_atom)       \
+    goto handle_error;
+
+#define RAISE_ERROR_MFA(error_type_atom, m, f, a) \
+    SET_ERROR_MFA(error_type_atom, m, f, a)       \
     goto handle_error;
 
 #define VM_ABORT() \
@@ -1241,6 +1268,13 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
         }                                                                                       \
     }
 
+#define RAISE_ERROR_FROM_HELPER(error_type_atom)           \
+    do {                                                   \
+        context_set_exception_class(ctx, ERROR_ATOM);      \
+        ctx->exception_reason = (error_type_atom);         \
+        return term_invalid_term();                        \
+    } while (0)
+
 #ifndef AVM_NO_EMU
 
 #define PROCESS_MAYBE_TRAP_RETURN_VALUE(return_value)           \
@@ -1260,6 +1294,19 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
         } else {                                                          \
             SCHEDULE_WAIT(mod, pc);                                       \
         }                                                                 \
+    }
+
+#define PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_PC_INDEX_ARITY(return_value, rest_pc, m, i, a)          \
+    if (term_is_invalid_term(return_value)) {                                                           \
+        if (UNLIKELY(!context_get_flags(ctx, Trap))) {                                                  \
+            term module_atom;                                                                           \
+            term function_atom;                                                                         \
+            module_get_imported_function_module_and_name_atoms((m), (i), &module_atom, &function_atom); \
+            pc = rest_pc;                                                                               \
+            HANDLE_ERROR_MFA(module_atom, function_atom, (a));                                          \
+        } else {                                                                                        \
+            SCHEDULE_WAIT(mod, pc);                                                                     \
+        }                                                                                               \
     }
 
 #define PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value)      \
@@ -1315,8 +1362,12 @@ static void destroy_extended_registers(Context *ctx, unsigned int live)
 
 #endif
 
-#define HANDLE_ERROR()                                                  \
-    x_regs[2] = stacktrace_create_raw(ctx, mod, pc - code, x_regs[0]);  \
+#define HANDLE_ERROR()                                                      \
+    ctx->exception_stacktrace = stacktrace_create_raw(ctx, mod, pc - code); \
+    goto handle_error;
+
+#define HANDLE_ERROR_MFA(m, f, a)                                                              \
+    ctx->exception_stacktrace = stacktrace_create_raw_mfa(ctx, mod, pc - code, (m), (f), (a)); \
     goto handle_error;
 
 #define VERIFY_IS_INTEGER(t, opcode_name, label)           \
@@ -1521,9 +1572,7 @@ static term maybe_alloc_boxed_integer_fragment(Context *ctx, avm_int64_t value)
     if ((value < AVM_INT_MIN) || (value > AVM_INT_MAX)) {
         Heap heap;
         if (UNLIKELY(memory_init_heap(&heap, BOXED_INT64_SIZE) != MEMORY_GC_OK)) {
-            ctx->x[0] = ERROR_ATOM;
-            ctx->x[1] = OUT_OF_MEMORY_ATOM;
-            return term_invalid_term();
+            RAISE_ERROR_FROM_HELPER(OUT_OF_MEMORY_ATOM);
         }
         memory_heap_append_heap(&ctx->heap, &heap);
 
@@ -1533,9 +1582,7 @@ static term maybe_alloc_boxed_integer_fragment(Context *ctx, avm_int64_t value)
     if ((value < MIN_NOT_BOXED_INT) || (value > MAX_NOT_BOXED_INT)) {
         Heap heap;
         if (UNLIKELY(memory_init_heap(&heap, BOXED_INT_SIZE) != MEMORY_GC_OK)) {
-            ctx->x[0] = ERROR_ATOM;
-            ctx->x[1] = OUT_OF_MEMORY_ATOM;
-            return term_invalid_term();
+            RAISE_ERROR_FROM_HELPER(OUT_OF_MEMORY_ATOM);
         }
         memory_heap_append_heap(&ctx->heap, &heap);
 
@@ -1818,19 +1865,8 @@ static bool maybe_call_native(Context *ctx, atom_index_t module_name, atom_index
 #endif
 
 #ifndef AVM_NO_EMU
-    static term extract_nbits_integer(Context *ctx, const uint8_t *bytes, size_t bytes_size, intn_from_integer_options_t opts)
+    static term make_bigint_from_digits(Context *ctx, intn_digit_t *bigint, intn_integer_sign_t sign, size_t count)
     {
-        intn_integer_sign_t sign;
-        intn_digit_t bigint[INTN_MAX_RES_LEN];
-        int count = intn_from_integer_bytes(bytes, bytes_size, opts, bigint, &sign);
-        if (UNLIKELY(count < 0)) {
-            // this is likely unreachable, compiler seem to generate an external term
-            // and to encode this as SMALL_BIG_EXT, so I don't think this code is executed
-            ctx->x[0] = ERROR_ATOM;
-            ctx->x[1] = OVERFLOW_ATOM;
-            return term_invalid_term();
-        }
-
         size_t intn_data_size;
         size_t rounded_res_len;
         term_bigint_size_requirements(count, &intn_data_size, &rounded_res_len);
@@ -1838,9 +1874,7 @@ static bool maybe_call_native(Context *ctx, atom_index_t module_name, atom_index
         Heap heap;
         if (UNLIKELY(
                 memory_init_heap(&heap, BOXED_BIGINT_HEAP_SIZE(intn_data_size)) != MEMORY_GC_OK)) {
-            ctx->x[0] = ERROR_ATOM;
-            ctx->x[1] = OUT_OF_MEMORY_ATOM;
-            return term_invalid_term();
+            RAISE_ERROR_FROM_HELPER(OUT_OF_MEMORY_ATOM);
         }
 
         term bigint_term
@@ -1850,6 +1884,20 @@ static bool maybe_call_native(Context *ctx, atom_index_t module_name, atom_index
         memory_heap_append_heap(&ctx->heap, &heap);
 
         return bigint_term;
+    }
+
+    static term extract_nbits_integer(Context *ctx, const uint8_t *bytes, size_t bytes_size, intn_from_integer_options_t opts)
+    {
+        intn_integer_sign_t sign;
+        intn_digit_t bigint[INTN_MAX_RES_LEN];
+        int count = intn_from_integer_bytes(bytes, bytes_size, opts, bigint, &sign);
+        if (UNLIKELY(count < 0)) {
+            // this is likely unreachable, compiler seem to generate an external term
+            // and to encode this as SMALL_BIG_EXT, so I don't think this code is executed
+            RAISE_ERROR_FROM_HELPER(OVERFLOW_ATOM);
+        }
+
+        return make_bigint_from_digits(ctx, bigint, sign, count);
     }
 
     static size_t decode_nbits_integer(Context *ctx, const uint8_t *encoded, term *out_term)
@@ -2093,9 +2141,9 @@ loop:
             }
 
             case OP_FUNC_INFO: {
-                int module_atom;
+                term module_atom;
                 DECODE_ATOM(module_atom, pc)
-                int function_name_atom;
+                term function_name_atom;
                 DECODE_ATOM(function_name_atom, pc)
                 uint32_t arity;
                 DECODE_LITERAL(arity, pc);
@@ -2106,7 +2154,7 @@ loop:
                 USED_BY_TRACE(arity);
 
                 #ifdef IMPL_EXECUTE_LOOP
-                    RAISE_ERROR(FUNCTION_CLAUSE_ATOM);
+                    RAISE_ERROR_MFA(FUNCTION_CLAUSE_ATOM, module_atom, function_name_atom, arity);
                 #endif
                 break;
             }
@@ -2233,7 +2281,7 @@ loop:
                         case NIFFunctionType: {
                             const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
                             term return_value = nif->nif_ptr(ctx, arity, x_regs);
-                            PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_PC(return_value, orig_pc);
+                            PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_PC_INDEX_ARITY(return_value, orig_pc, mod, index, arity);
                             x_regs[0] = return_value;
                             if (ctx->heap.root->next) {
                                 if (UNLIKELY(memory_ensure_free_with_roots(ctx, 0, 1, x_regs, MEMORY_FORCE_SHRINK) != MEMORY_GC_OK)) {
@@ -2798,6 +2846,7 @@ loop:
                     }
                     PROCESS_SIGNAL_MESSAGES();
                     mailbox_remove_message(&ctx->mailbox, &ctx->heap);
+                    ctx->mailbox.receive_has_match_clauses = false;
                     // Cannot GC now as remove_message is GC neutral
                 #endif
                 break;
@@ -2808,6 +2857,7 @@ loop:
 
                 #ifdef IMPL_EXECUTE_LOOP
                     context_update_flags(ctx, ~WaitingTimeoutExpired, NoFlags);
+                    ctx->mailbox.receive_has_match_clauses = false;
 
                     mailbox_reset(&ctx->mailbox);
                 #endif
@@ -2823,6 +2873,7 @@ loop:
                 TRACE("loop_rec/2, dreg=%c%i\n", T_DEST_REG(dreg));
 
                 #ifdef IMPL_EXECUTE_LOOP
+                    ctx->mailbox.receive_has_match_clauses = true;
                     term ret;
                     PROCESS_SIGNAL_MESSAGES();
                     if (mailbox_peek(ctx, &ret)) {
@@ -2898,15 +2949,19 @@ loop:
                         needs_to_wait = 1;
                     } else if (context_get_flags(ctx, WaitingTimeout) != 0) {
                         needs_to_wait = 1;
-                    } else if (!mailbox_has_next(&ctx->mailbox)) {
-                        needs_to_wait = 1;
                     }
+                    // else: WaitingTimeoutExpired -- fall through to timeout.
+                    // Any messages in the mailbox are left for the next receive.
 
                     if (needs_to_wait) {
+                        // Signal processing may have moved messages to the inner
+                        // list. If there are match clauses (loop_rec was
+                        // executed), jump to loop_rec to scan them.
+                        if (ctx->mailbox.receive_has_match_clauses && mailbox_has_next(&ctx->mailbox)) {
+                            JUMP_TO_ADDRESS(mod->labels[label]);
+                        }
                         ctx->waiting_with_timeout = true;
                         SCHEDULE_WAIT(mod, saved_pc);
-                    } else {
-                        JUMP_TO_ADDRESS(mod->labels[label]);
                     }
                 #endif
 
@@ -2922,16 +2977,16 @@ loop:
 #ifdef IMPL_EXECUTE_LOOP
 wait_timeout_trap_handler:
             {
-                // Determine if a message arrived to either jump to timeout label
-                // or to continuation.
                 // Redo the offset computation and refetch the label
                 int label;
                 DECODE_LABEL(label, pc)
-                int timeout;
+                term timeout;
                 DECODE_COMPACT_TERM(timeout, pc)
                 TRACE("wait_timeout_trap_handler, label: %i\n", label);
                 PROCESS_SIGNAL_MESSAGES();
                 if (context_get_flags(ctx, WaitingTimeoutExpired)) {
+                    // Timer expired -- fall through to timeout.
+                    // Any messages in the mailbox are left for the next receive.
                     ctx->waiting_with_timeout = false;
                 } else {
                     if (UNLIKELY(!mailbox_has_next(&ctx->mailbox))) {
@@ -4008,9 +4063,6 @@ wait_timeout_trap_handler:
             }
 
             case OP_RAISE: {
-                #ifdef IMPL_EXECUTE_LOOP
-                    const uint8_t *saved_pc = pc - 1;
-                #endif
                 term stacktrace;
                 DECODE_COMPACT_TERM(stacktrace, pc);
                 term exc_value;
@@ -4024,9 +4076,9 @@ wait_timeout_trap_handler:
 
                 #ifdef IMPL_EXECUTE_LOOP
                     TRACE("raise/2 stacktrace=0x%" TERM_X_FMT " exc_value=0x%" TERM_X_FMT "\n", stacktrace, exc_value);
-                    x_regs[0] = stacktrace_exception_class(stacktrace);
-                    x_regs[1] = exc_value;
-                    x_regs[2] = stacktrace_create_raw(ctx, mod, saved_pc - code, x_regs[0]);
+                    context_set_exception_class(ctx, stacktrace_exception_class(stacktrace));
+                    ctx->exception_reason = exc_value;
+                    ctx->exception_stacktrace = stacktrace;
                     goto handle_error;
                 #endif
 
@@ -4464,8 +4516,8 @@ wait_timeout_trap_handler:
                 DECODE_COMPACT_TERM(src, pc);
                 term arg2;
                 DECODE_COMPACT_TERM(arg2, pc);
-                term flags;
-                DECODE_LITERAL(flags, pc);
+                uint32_t flags_value;
+                DECODE_LITERAL(flags_value, pc);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_skip_utf16/5\n");
@@ -4481,7 +4533,7 @@ wait_timeout_trap_handler:
 
                     int32_t val = 0;
                     size_t out_size = 0;
-                    bool is_valid = bitstring_match_utf16(src_bin, (size_t) offset_bits, &val, &out_size, flags);
+                    bool is_valid = bitstring_match_utf16(src_bin, (size_t) offset_bits, &val, &out_size, flags_value);
 
                     if (!is_valid) {
                         pc = mod->labels[fail];
@@ -4576,8 +4628,8 @@ wait_timeout_trap_handler:
                 DECODE_COMPACT_TERM(src, pc);
                 term arg2;
                 DECODE_COMPACT_TERM(arg2, pc);
-                term flags;
-                DECODE_LITERAL(flags, pc);
+                uint32_t flags_value;
+                DECODE_LITERAL(flags_value, pc);
 
                 #ifdef IMPL_CODE_LOADER
                     TRACE("bs_skip_utf32/5\n");
@@ -4592,7 +4644,7 @@ wait_timeout_trap_handler:
                     avm_int_t offset_bits = term_get_match_state_offset(src);
 
                     int32_t val = 0;
-                    bool is_valid = bitstring_match_utf32(src_bin, (size_t) offset_bits, &val, flags);
+                    bool is_valid = bitstring_match_utf32(src_bin, (size_t) offset_bits, &val, flags_value);
 
                     if (!is_valid) {
                         pc = mod->labels[fail];
@@ -4769,15 +4821,45 @@ wait_timeout_trap_handler:
                     VERIFY_IS_ANY_INTEGER(src, "bs_put_integer", 0);
                     VERIFY_IS_INTEGER(size, "bs_put_integer", 0);
 
-                    avm_int64_t src_value = term_maybe_unbox_int64(src);
                     avm_int_t size_value = term_to_int(size);
 
-                    TRACE("bs_put_integer/5, fail=%u size=" AVM_INT_FMT " unit=%u flags=%x src=%i\n", (unsigned) fail, size_value, (unsigned) unit, (int) flags_value, (unsigned int) src_value);
+                    if (term_is_int(src)
+                        || term_boxed_size(src) <= BOXED_TERMS_REQUIRED_FOR_INT64) {
+                        avm_int64_t src_value = term_maybe_unbox_int64(src);
 
-                    bool result = bitstring_insert_integer(ctx->bs, ctx->bs_offset, src_value, size_value * unit, flags_value);
-                    if (UNLIKELY(!result)) {
-                        TRACE("bs_put_integer: Failed to insert integer into binary\n");
-                        RAISE_ERROR(BADARG_ATOM);
+                        TRACE("bs_put_integer/5, fail=%u size=" AVM_INT_FMT
+                              " unit=%u flags=%x src=%i\n",
+                            (unsigned) fail, size_value, (unsigned) unit, (int) flags_value,
+                            (unsigned int) src_value);
+
+                        bool result = bitstring_insert_integer(
+                            ctx->bs, ctx->bs_offset, src_value, size_value * unit, flags_value);
+                        if (UNLIKELY(!result)) {
+                            TRACE("bs_put_integer: Failed to insert integer into binary\n");
+                            RAISE_ERROR(BADARG_ATOM);
+                        }
+                    } else {
+                        const intn_digit_t *big_src_value = NULL;
+                        size_t big_len = 0;
+                        intn_integer_sign_t big_sign;
+
+                        term_to_bigint(src, &big_src_value, &big_len, &big_sign);
+
+                        // when building a binary, `signed` flag is implicit
+                        intn_from_integer_options_t intn_flags
+                            = bitstring_flags_to_intn_opts(flags_value);
+                        int byte_offset = ctx->bs_offset / 8;
+                        uint8_t *dst = (uint8_t *) term_binary_data(ctx->bs) + byte_offset;
+                        size_t t_capacity = term_binary_size(ctx->bs);
+                        size_t avail = t_capacity - byte_offset;
+
+                        int written = intn_to_integer_bytes(
+                            big_src_value, big_len, big_sign, intn_flags, dst, avail);
+                        if (UNLIKELY(written < 0)) {
+                            TRACE("bs_create_bin/6: Failed to insert integer into "
+                                  "binary\n");
+                            RAISE_ERROR(BADARG_ATOM);
+                        }
                     }
 
                     ctx->bs_offset += size_value * unit;
@@ -5396,7 +5478,15 @@ wait_timeout_trap_handler:
                         } else {
                             term_set_match_state_offset(src, bs_offset + increment);
 
-                            t = maybe_alloc_boxed_integer_fragment(ctx, value.s);
+                            if ((flags_value & SignedInteger) || (value.u <= INT64_MAX)) {
+                                t = maybe_alloc_boxed_integer_fragment(ctx, value.s);
+                            } else {
+                                intn_digit_t int_buf[INTN_UINT64_LEN];
+                                intn_from_uint64(value.u, int_buf);
+                                t = make_bigint_from_digits(
+                                    ctx, int_buf, IntNPositiveInteger, INTN_UINT64_LEN);
+                            }
+
                             if (UNLIKELY(term_is_invalid_term(t))) {
                                 HANDLE_ERROR();
                             }
@@ -6666,6 +6756,9 @@ wait_timeout_trap_handler:
                                 ex_class != THROW_ATOM)) {
                         x_regs[0] = BADARG_ATOM;
                     } else {
+                        context_set_exception_class(ctx, x_regs[0]);
+                        ctx->exception_reason = x_regs[1];
+                        ctx->exception_stacktrace = x_regs[2];
                         goto handle_error;
                     }
                 #endif
@@ -6998,17 +7091,13 @@ wait_timeout_trap_handler:
                                         JUMP_TO_LABEL(mod, fail);
                                     }
                                 }
-                                // size is optional for floats, defaults to 64
-                                avm_int_t signed_size_value = 64;
-                                if (size != term_nil()) {
-                                    VERIFY_IS_INTEGER(size, "bs_create_bin/6", fail);
-                                    signed_size_value = term_to_int(size);
-                                    if (UNLIKELY(signed_size_value != 16 && signed_size_value != 32 && signed_size_value != 64)) {
-                                        if (fail == 0) {
-                                            RAISE_ERROR(BADARG_ATOM);
-                                        } else {
-                                            JUMP_TO_LABEL(mod, fail);
-                                        }
+                                VERIFY_IS_INTEGER(size, "bs_create_bin/6", fail);
+                                avm_int_t signed_size_value = term_to_int(size);
+                                if (UNLIKELY(signed_size_value != 16 && signed_size_value != 32 && signed_size_value != 64)) {
+                                    if (fail == 0) {
+                                        RAISE_ERROR(BADARG_ATOM);
+                                    } else {
+                                        JUMP_TO_LABEL(mod, fail);
                                     }
                                 }
                                 segment_size = signed_size_value;
@@ -7113,6 +7202,9 @@ wait_timeout_trap_handler:
                         size_t segment_size;
                         avm_int_t flags_value = 0;
                         avm_int64_t src_value = 0;
+                        const intn_digit_t *big_src_value = NULL;
+                        size_t big_len = 0;
+                        intn_integer_sign_t big_sign = IntNPositiveInteger;
                         size_t size_value = 0;
                         switch (atom_type) {
                             case UTF16_ATOM:
@@ -7132,7 +7224,12 @@ wait_timeout_trap_handler:
                                 src_value = term_to_int(src);
                                 break;
                             case INTEGER_ATOM:
-                                src_value = term_maybe_unbox_int64(src);
+                                if (term_is_int(src)
+                                    || term_boxed_size(src) <= BOXED_TERMS_REQUIRED_FOR_INT64) {
+                                    src_value = term_maybe_unbox_int64(src);
+                                } else {
+                                    term_to_bigint(src, &big_src_value, &big_len, &big_sign);
+                                }
                                 break;
                             default:
                                 break;
@@ -7143,11 +7240,7 @@ wait_timeout_trap_handler:
                                 size_value = (size_t) term_to_int(size);
                                 break;
                             case FLOAT_ATOM:
-                                if (size != term_nil()) {
-                                    size_value = (size_t) term_to_int(size);
-                                } else {
-                                    size_value = 64;
-                                }
+                                size_value = (size_t) term_to_int(size);
                                 break;
                             default:
                                 break;
@@ -7183,12 +7276,32 @@ wait_timeout_trap_handler:
                                 break;
                             }
                             case INTEGER_ATOM: {
-                                bool result = bitstring_insert_integer(t, offset, src_value, size_value * segment_unit, flags_value);
-                                if (UNLIKELY(!result)) {
-                                    TRACE("bs_create_bin/6: Failed to insert integer into binary\n");
-                                    RAISE_ERROR(BADARG_ATOM);
+                                if (!big_src_value) {
+                                    bool result = bitstring_insert_integer(t, offset, src_value,
+                                        size_value * segment_unit, flags_value);
+                                    if (UNLIKELY(!result)) {
+                                        TRACE("bs_create_bin/6: Failed to insert integer into "
+                                              "binary\n");
+                                        RAISE_ERROR(BADARG_ATOM);
+                                    }
+                                } else {
+                                    // when building a binary, `signed` flag is implicit
+                                    intn_from_integer_options_t intn_flags
+                                        = bitstring_flags_to_intn_opts(flags_value);
+                                    int byte_offset = offset / 8;
+                                    uint8_t *dst = (uint8_t *) term_binary_data(t) + byte_offset;
+                                    size_t t_capacity = term_binary_size(t);
+                                    size_t avail = t_capacity - byte_offset;
+
+                                    int written = intn_to_integer_bytes(
+                                        big_src_value, big_len, big_sign, intn_flags, dst, avail);
+                                    if (UNLIKELY(written < 0)) {
+                                        TRACE("bs_create_bin/6: Failed to insert integer into "
+                                              "binary\n");
+                                        RAISE_ERROR(BADARG_ATOM);
+                                    }
                                 }
-                                segment_size = size_value;
+                                segment_size = size_value * segment_unit;
                                 break;
                             }
                             case FLOAT_ATOM: {
@@ -7498,8 +7611,14 @@ wait_timeout_trap_handler:
                                         TRACE("bs_match/3: error extracting integer.\n");
                                         goto bs_match_jump_to_fail;
                                     }
-                                    //FIXME: handling of 64-bit unsigned integers is not reliable
-                                    t = maybe_alloc_boxed_integer_fragment(ctx, value.s);
+                                    if ((flags_value & SignedInteger) || (value.u <= INT64_MAX)) {
+                                        t = maybe_alloc_boxed_integer_fragment(ctx, value.s);
+                                    } else {
+                                        intn_digit_t int_buf[INTN_UINT64_LEN];
+                                        intn_from_uint64(value.u, int_buf);
+                                        t = make_bigint_from_digits(
+                                            ctx, int_buf, IntNPositiveInteger, INTN_UINT64_LEN);
+                                    }
                                     if (UNLIKELY(term_is_invalid_term(t))) {
                                         RAISE_ERROR(OUT_OF_MEMORY_ATOM);
                                     }
@@ -7673,6 +7792,49 @@ wait_timeout_trap_handler:
 bs_match_jump_to_fail:
                     JUMP_TO_ADDRESS(mod->labels[fail]);
                 #endif
+
+                case OP_BIF3: {
+                    uint32_t fail_label;
+                    DECODE_LABEL(fail_label, pc);
+                    uint32_t bif;
+                    DECODE_LITERAL(bif, pc);
+                    term arg1;
+                    DECODE_COMPACT_TERM(arg1, pc)
+                    term arg2;
+                    DECODE_COMPACT_TERM(arg2, pc)
+                    term arg3;
+                    DECODE_COMPACT_TERM(arg3, pc);
+                    DEST_REGISTER(dreg);
+                    DECODE_DEST_REGISTER(dreg, pc);
+
+                    TRACE("bif3/6 bif=%i, fail=%i, dreg=%c%i\n", bif, fail_label, T_DEST_REG(dreg));
+                    USED_BY_TRACE(bif);
+
+                    #ifdef IMPL_CODE_LOADER
+                        UNUSED(arg1);
+                        UNUSED(arg2);
+                        UNUSED(arg3);
+                    #endif
+
+                    #ifdef IMPL_EXECUTE_LOOP
+                        const struct ExportedFunction *exported_bif = mod->imported_funcs[bif];
+                        BifImpl3 func = EXPORTED_FUNCTION_TO_BIF(exported_bif)->bif3_ptr;
+                        DEBUG_FAIL_NULL(func);
+                        term ret = func(ctx, fail_label, arg1, arg2, arg3);
+                        if (UNLIKELY(term_is_invalid_term(ret))) {
+                            if (fail_label) {
+                                pc = mod->labels[fail_label];
+                                break;
+                            } else {
+                                HANDLE_ERROR();
+                            }
+                        }
+
+                        WRITE_REGISTER(dreg, ret);
+                    #endif
+
+                    break;
+                }
             }
 #endif
 
@@ -7692,12 +7854,19 @@ bs_match_jump_to_fail:
 #ifdef IMPL_EXECUTE_LOOP
 #ifndef AVM_NO_EMU
 do_abort:
-        x_regs[0] = ERROR_ATOM;
-        x_regs[1] = VM_ABORT_ATOM;
+        context_set_exception_class(ctx, ERROR_ATOM);
+        ctx->exception_reason = VM_ABORT_ATOM;
 #endif
 
 handle_error:
         {
+            x_regs[0] = context_exception_class(ctx);
+            x_regs[1] = ctx->exception_reason;
+            x_regs[2] = ctx->exception_stacktrace;
+            context_set_exception_class(ctx, term_nil());
+            ctx->exception_reason = term_nil();
+            ctx->exception_stacktrace = term_nil();
+
             int target_label = context_get_catch_label(ctx, &mod);
             if (target_label) {
 #if AVM_NO_JIT

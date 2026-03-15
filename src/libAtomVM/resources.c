@@ -120,6 +120,9 @@ int enif_release_resource(void *resource)
     return true;
 }
 
+// Suppress deprecation warning for the implementation
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 ERL_NIF_TERM enif_make_resource(ErlNifEnv *env, void *obj)
 {
     if (UNLIKELY(memory_erl_nif_env_ensure_free(env, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
@@ -127,6 +130,7 @@ ERL_NIF_TERM enif_make_resource(ErlNifEnv *env, void *obj)
     }
     return term_from_resource(obj, &env->heap);
 }
+#pragma GCC diagnostic pop
 
 static void enif_select_event_message_dispose(Message *message, GlobalContext *global, bool from_task)
 {
@@ -400,11 +404,25 @@ int enif_monitor_process(ErlNifEnv *env, void *obj, const ErlNifPid *target_pid,
     Context *target = globalcontext_get_process_lock(env->global, *target_pid);
     if (IS_NULL_PTR(target)) {
         free(resource_monitor);
-        free(monitor);
+        struct ResourceContextMonitor *resource_context_monitor = CONTAINER_OF(monitor, struct ResourceContextMonitor, monitor);
+        free(resource_context_monitor);
         return 1;
     }
 
-    synclist_append(&resource_type->monitors, &resource_monitor->resource_list_head);
+    // Definitive overflow check and append+increment under the monitors lock
+    // so two concurrent callers cannot both pass and overflow monitor_refc.
+    struct ListHead *monitor_list = synclist_wrlock(&resource_type->monitors);
+    if (UNLIKELY(((resource->ref_count & REFC_MONITOR_MASK) >> REFC_COUNT_BITS) >= REFC_MONITOR_MAX)) {
+        synclist_unlock(&resource_type->monitors);
+        free(resource_monitor);
+        struct ResourceContextMonitor *resource_context_monitor = CONTAINER_OF(monitor, struct ResourceContextMonitor, monitor);
+        free(resource_context_monitor);
+        globalcontext_get_process_unlock(env->global, target);
+        return -1;
+    }
+    list_append(monitor_list, &resource_monitor->resource_list_head);
+    refc_binary_add_refcount(resource, REFC_MONITOR_INC);
+    synclist_unlock(&resource_type->monitors);
     mailbox_send_monitor_signal(target, MonitorSignal, monitor);
     globalcontext_get_process_unlock(env->global, target);
 
@@ -419,14 +437,14 @@ int enif_monitor_process(ErlNifEnv *env, void *obj, const ErlNifPid *target_pid,
 void resource_type_fire_monitor(struct ResourceType *resource_type, ErlNifEnv *env, int32_t process_id, uint64_t ref_ticks)
 {
     struct RefcBinary *refc = NULL;
+    bool is_dying = false;
     struct ListHead *monitors = synclist_wrlock(&resource_type->monitors);
     struct ListHead *item;
     LIST_FOR_EACH (item, monitors) {
         struct ResourceMonitor *monitor = GET_LIST_ENTRY(item, struct ResourceMonitor, resource_list_head);
         if (monitor->ref_ticks == ref_ticks) {
-            // Resource still exists.
             refc = monitor->resource;
-            refc_binary_increment_refcount(refc);
+            is_dying = refc->ref_count & REFC_DYING_FLAG;
             list_remove(&monitor->resource_list_head);
             free(monitor);
             break;
@@ -435,12 +453,26 @@ void resource_type_fire_monitor(struct ResourceType *resource_type, ErlNifEnv *e
 
     synclist_unlock(&resource_type->monitors);
 
-    if (refc) {
+    if (refc == NULL) {
+        return;
+    }
+
+    if (!is_dying) {
         ErlNifMonitor monitor;
         monitor.ref_ticks = ref_ticks;
         monitor.resource_type = resource_type;
         resource_type->down(env, refc->data, &process_id, &monitor);
-        refc_binary_decrement_refcount(refc, env->global);
+    }
+
+    // Balance the increment from enif_monitor_process.
+    size_t val = refc_binary_sub_refcount(refc, REFC_MONITOR_INC);
+    if ((val & REFC_DYING_FLAG) && !(val & REFC_MONITOR_MASK)) {
+        // CAS REFC_DYING_FLAG -> 0 to claim the free; the decrement path
+        // in refc_binary_decrement_refcount uses the same claim.
+        size_t expected = REFC_DYING_FLAG;
+        if (refc_binary_cas_refcount(refc, &expected, 0)) {
+            refc_binary_free_resource(refc, env->global);
+        }
     }
 }
 
@@ -476,13 +508,14 @@ int enif_demonitor_process(ErlNifEnv *env, void *obj, const ErlNifMonitor *mon)
     int32_t target_process_id = INVALID_PROCESS_ID;
     uint64_t ref_ticks = 0;
 
+    struct RefcBinary *resource = refc_binary_from_data(obj);
+
     // Phase 1: Find and remove from monitors list while holding monitors lock
     struct ListHead *monitors = synclist_wrlock(&resource_type->monitors);
     struct ListHead *item;
     LIST_FOR_EACH (item, monitors) {
         struct ResourceMonitor *monitor = GET_LIST_ENTRY(item, struct ResourceMonitor, resource_list_head);
         if (monitor->ref_ticks == mon->ref_ticks) {
-            struct RefcBinary *resource = refc_binary_from_data(obj);
             if (resource->resource_type != mon->resource_type) {
                 synclist_unlock(&resource_type->monitors);
                 return -1;
@@ -491,6 +524,7 @@ int enif_demonitor_process(ErlNifEnv *env, void *obj, const ErlNifMonitor *mon)
             target_process_id = monitor->process_id;
             ref_ticks = monitor->ref_ticks;
             list_remove(&monitor->resource_list_head);
+            (void) refc_binary_sub_refcount(resource, REFC_MONITOR_INC);
             free(monitor);
             break;
         }
@@ -516,11 +550,14 @@ void destroy_resource_monitors(struct RefcBinary *resource, GlobalContext *globa
 {
     struct ResourceType *resource_type = resource->resource_type;
 
-    // Phase 1: Collect monitors to destroy while holding monitors lock
+    // Phase 1: Mark dying and collect monitors while holding the lock.
+    // The dying flag prevents concurrent resource_type_fire_monitor from
+    // calling down on a resource whose ref_count has reached 0.
     struct ListHead to_signal;
     list_init(&to_signal);
 
     struct ListHead *monitors = synclist_wrlock(&resource_type->monitors);
+    refc_binary_or_refcount(resource, REFC_DYING_FLAG);
     struct ListHead *item;
     struct ListHead *tmp;
     MUTABLE_LIST_FOR_EACH (item, tmp, monitors) {
@@ -532,8 +569,7 @@ void destroy_resource_monitors(struct RefcBinary *resource, GlobalContext *globa
     }
     synclist_unlock(&resource_type->monitors);
 
-    // Phase 2: Send demonitor signals without holding monitors lock
-    // This avoids lock order inversion with processes_table
+    // Phase 2: Send demonitor signals without holding monitors lock.
     MUTABLE_LIST_FOR_EACH (item, tmp, &to_signal) {
         struct ResourceMonitor *monitor = GET_LIST_ENTRY(item, struct ResourceMonitor, resource_list_head);
         Context *target = globalcontext_get_process_lock(global, monitor->process_id);
@@ -542,6 +578,7 @@ void destroy_resource_monitors(struct RefcBinary *resource, GlobalContext *globa
             globalcontext_get_process_unlock(global, target);
         }
         list_remove(&monitor->resource_list_head);
+        (void) refc_binary_sub_refcount(resource, REFC_MONITOR_INC);
         free(monitor);
     }
 }
@@ -630,16 +667,13 @@ const ErlNifResourceTypeInit resource_binary_resource_type_init = {
     .dtor = resource_binary_dtor,
 };
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 ERL_NIF_TERM enif_make_resource_binary(ErlNifEnv *env, void *obj, const void *data, size_t size)
 {
-    if (UNLIKELY(memory_erl_nif_env_ensure_free(env, TERM_BOXED_REFERENCE_RESOURCE_SIZE) != MEMORY_GC_OK)) {
+    if (UNLIKELY(memory_erl_nif_env_ensure_free(env, TERM_BOXED_REFC_BINARY_SIZE) != MEMORY_GC_OK)) {
         AVM_ABORT();
     }
-    struct ResourceBinary *resource_binary = enif_alloc_resource(env->global->resource_binary_resource_type, sizeof(struct ResourceBinary));
-    resource_binary->managing_resource = refc_binary_from_data(obj);
-    resource_binary->data = data;
-
-    term result = term_from_resource_binary_pointer(resource_binary, size, &env->heap);
-    refc_binary_decrement_refcount(refc_binary_from_data(resource_binary), env->global);
-    return result;
+    return term_from_resource_binary(obj, data, size, &env->heap, env->global);
 }
+#pragma GCC diagnostic pop

@@ -56,6 +56,12 @@ test() ->
     ok = test_last(),
     ok = test_mapfoldl(),
     ok = test_append(),
+    ok = test_min(),
+    ok = test_max(),
+    ok = test_sublist3(),
+    ok = test_droplast(),
+    ok = test_zip(),
+    ok = test_zipwith(),
     ok.
 
 test_nth() ->
@@ -485,5 +491,74 @@ test_append() ->
     ?ASSERT_ERROR(lists:append(1, 3), badarg),
     ok.
 
+test_min() ->
+    ?ASSERT_MATCH(lists:min([1]), 1),
+    ?ASSERT_MATCH(lists:min([1, 2, 3]), 1),
+    ?ASSERT_MATCH(lists:min([3, 1, 2]), 1),
+    ?ASSERT_MATCH(lists:min([3, 2, 1]), 1),
+    ?ASSERT_MATCH(lists:min([-5, 0, 5]), -5),
+    ?ASSERT_MATCH(lists:min([a, b, c]), a),
+    ?ASSERT_MATCH(lists:min([c, b, a]), a),
+    ?ASSERT_ERROR(lists:min([]), function_clause),
+    ok.
+
+test_max() ->
+    ?ASSERT_MATCH(lists:max([1]), 1),
+    ?ASSERT_MATCH(lists:max([1, 2, 3]), 3),
+    ?ASSERT_MATCH(lists:max([3, 1, 2]), 3),
+    ?ASSERT_MATCH(lists:max([1, 3, 2]), 3),
+    ?ASSERT_MATCH(lists:max([-5, 0, 5]), 5),
+    ?ASSERT_MATCH(lists:max([a, b, c]), c),
+    ?ASSERT_MATCH(lists:max([c, b, a]), c),
+    ?ASSERT_ERROR(lists:max([]), function_clause),
+    ok.
+
+test_sublist3() ->
+    ?ASSERT_MATCH(lists:sublist([a, b, c, d, e], 1, 3), [a, b, c]),
+    ?ASSERT_MATCH(lists:sublist([a, b, c, d, e], 2, 3), [b, c, d]),
+    ?ASSERT_MATCH(lists:sublist([a, b, c, d, e], 3, 10), [c, d, e]),
+    ?ASSERT_MATCH(lists:sublist([a, b, c], 1, 0), []),
+    ?ASSERT_MATCH(lists:sublist([], 1, 0), []),
+    ?ASSERT_ERROR(lists:sublist([a, b, c], 0, 1), function_clause),
+    ?ASSERT_ERROR(lists:sublist([a, b, c], 1, -1), function_clause),
+    case get_otp_version() > 22 of
+        true ->
+            ?ASSERT_MATCH(lists:sublist([a, b, c], 5, 1), []);
+        false ->
+            % Can we get rid of OTP21 and 22 compatibility please?
+            ok
+    end,
+    ok.
+
+test_droplast() ->
+    ?ASSERT_MATCH(lists:droplast([a]), []),
+    ?ASSERT_MATCH(lists:droplast([a, b]), [a]),
+    ?ASSERT_MATCH(lists:droplast([a, b, c]), [a, b]),
+    ?ASSERT_ERROR(lists:droplast([]), function_clause),
+    ok.
+
+test_zip() ->
+    ?ASSERT_MATCH(lists:zip([a, b, c], [1, 2, 3]), [{a, 1}, {b, 2}, {c, 3}]),
+    ?ASSERT_MATCH(lists:zip([], []), []),
+    ?ASSERT_MATCH(lists:zip([a], [1]), [{a, 1}]),
+    ?ASSERT_ERROR(lists:zip([a, b], [1]), function_clause),
+    ?ASSERT_ERROR(lists:zip([a], [1, 2]), function_clause),
+    ok.
+
+test_zipwith() ->
+    ?ASSERT_MATCH(lists:zipwith(fun(A, B) -> {A, B} end, [a, b, c], [1, 2, 3]), [
+        {a, 1}, {b, 2}, {c, 3}
+    ]),
+    ?ASSERT_MATCH(lists:zipwith(fun(A, B) -> A + B end, [1, 2, 3], [10, 20, 30]), [11, 22, 33]),
+    ?ASSERT_MATCH(lists:zipwith(fun(_, _) -> ok end, [], []), []),
+    ?ASSERT_ERROR(lists:zipwith(fun(A, B) -> {A, B} end, [a], [1, 2]), function_clause),
+    ok.
+
 id(X) ->
     X.
+
+get_otp_version() ->
+    case erlang:system_info(machine) of
+        "BEAM" -> list_to_integer(erlang:system_info(otp_release));
+        _ -> atomvm
+    end.

@@ -112,6 +112,7 @@ compile_minimal_x86_64_test() ->
         fun(_) -> undefined end,
         fun(_) -> undefined end,
         fun(_) -> any end,
+        fun(_) -> undefined end,
         jit_x86_64,
         Stream2
     ),
@@ -159,10 +160,11 @@ compile_stream_for_backend(Backend, CodeChunk, AtomChunk, TypeChunk) ->
     AtomResolver = jit_precompile:atom_resolver(AtomChunk),
     LiteralResolver = fun(_) -> test_literal end,
     TypeResolver = jit_precompile:type_resolver(TypeChunk),
+    ImportResolver = fun(_) -> {test, test, 2} end,
 
     % Compile with typed register support
     {LabelsCount, Stream3} = jit:compile(
-        CodeChunk, AtomResolver, LiteralResolver, TypeResolver, Backend, Stream2
+        CodeChunk, AtomResolver, LiteralResolver, TypeResolver, ImportResolver, Backend, Stream2
     ),
     Backend:stream(Stream3).
 
@@ -189,41 +191,40 @@ term_to_int_verify_is_match_state_typed_optimization_x86_64_test() ->
     ),
 
     % Check call to bs_start_match3 is followed by a skip of verify_is_boxed
-    %  100:	48 8b 77 30          	mov    0x30(%rdi),%rsi
-    %  104:	48 c7 c2 00 00 00 00 	mov    $0x0,%rdx
-    %  10b:	ff d0                	callq  *%rax
-    %  10d:	5a                   	pop    %rdx
-    %  10e:	5e                   	pop    %rsi
-    %  10f:	5f                   	pop    %rdi
-    %  110:	48 89 47 40          	mov    %rax,0x40(%rdi)
-    %  114:	48 8b 47 40          	mov    0x40(%rdi),%rax
-    %  118:	48 83 e0 fc          	and    $0xfffffffffffffffc,%rax
+    % The register value cache eliminates the redundant load after the store,
+    % since %rax already holds the value.
+    %   48 8b 77 30          	mov    0x30(%rdi),%rsi
+    %   48 c7 c2 00 00 00 00 	mov    $0x0,%rdx
+    %   ff d0                	callq  *%rax
+    %   5a                   	pop    %rdx
+    %   5e                   	pop    %rsi
+    %   5f                   	pop    %rdi
+    %   48 89 47 40          	mov    %rax,0x40(%rdi)
+    %   48 83 e0 fc          	and    $0xfffffffffffffffc,%rax
 
-    % As opposed to:
-    %  100:	48 8b 77 30          	mov    0x30(%rdi),%rsi
-    %  104:	48 c7 c2 00 00 00 00 	mov    $0x0,%rdx
-    %  10b:	ff d0                	callq  *%rax
-    %  10d:	5a                   	pop    %rdx
-    %  10e:	5e                   	pop    %rsi
-    %  10f:	5f                   	pop    %rdi
-    %  110:	48 89 47 40          	mov    %rax,0x40(%rdi)
-    %  114:	48 8b 47 40          	mov    0x40(%rdi),%rax
-    %  118:	49 89 c3             	mov    %rax,%r11
-    %  11b:	41 80 e3 03          	and    $0x3,%r11b
-    %  11f:	41 80 fb 02          	cmp    $0x2,%r11b
-    %  123:	74 13                	je     0x138
-    %  125:	48 8b 02             	mov    (%rdx),%rax
-    %  128:	48 c7 c2 28 01 00 00 	mov    $0x128,%rdx
-    %  12f:	48 c7 c1 0b 01 00 00 	mov    $0x10b,%rcx
-    %  136:	ff e0                	jmpq   *%rax
-    %  138:	48 83 e0 fc          	and    $0xfffffffffffffffc,%rax
+    % As opposed to (without typed optimization, verify_is_boxed would be emitted):
+    %   48 8b 77 30          	mov    0x30(%rdi),%rsi
+    %   48 c7 c2 00 00 00 00 	mov    $0x0,%rdx
+    %   ff d0                	callq  *%rax
+    %   5a                   	pop    %rdx
+    %   5e                   	pop    %rsi
+    %   5f                   	pop    %rdi
+    %   48 89 47 40          	mov    %rax,0x40(%rdi)
+    %   49 89 c3             	mov    %rax,%r11
+    %   41 80 e3 03          	and    $0x3,%r11b
+    %   41 80 fb 02          	cmp    $0x2,%r11b
+    %   74 0f                	je     <skip>
+    %   48 8b 02             	mov    (%rdx),%rax
+    %   ba xx xx 00 00       	mov    $0x...,%edx
+    %   b9 xx xx 00 00       	mov    $0x...,%ecx
+    %   ff e0                	jmpq   *%rax
+    %   48 83 e0 fc          	and    $0xfffffffffffffffc,%rax
     ?assertMatch(
-        {_, 28},
+        {_, 24},
         binary:match(
             CompiledCode,
             <<16#48, 16#8b, 16#77, 16#30, 16#48, 16#c7, 16#c2, 16#00, 16#00, 16#00, 16#00, 16#ff,
-                16#d0, 16#5a, 16#5e, 16#5f, 16#48, 16#89, 16#47, 16#40, 16#48, 16#8b, 16#47, 16#40,
-                16#48, 16#83, 16#e0, 16#fc>>
+                16#d0, 16#5a, 16#5e, 16#5f, 16#48, 16#89, 16#47, 16#40, 16#48, 16#83, 16#e0, 16#fc>>
         )
     ),
 
@@ -289,35 +290,26 @@ tail_call_cache_armv6m_test() ->
         jit_armv6m, ?CODE_CHUNK_3, ?ATU8_CHUNK_3, ?TYPE_CHUNK_3
     ),
 
-    % Check that we have the following pattern:
-    %  8c:	278c      	movs	r7, #140	; 0x8c
-    %  8e:	6816      	ldr	r6, [r2, #0]
-    %  90:	463a      	mov	r2, r7
-    %  92:	23ff      	movs	r3, #255	; 0xff
-    %  94:	33cc      	adds	r3, #204	; 0xcc
-    %  96:	9f05      	ldr	r7, [sp, #20]
-    %  98:	9605      	str	r6, [sp, #20]
-    %  9a:	46be      	mov	lr, r7
-    %  9c:	bdf2      	pop	{r1, r4, r5, r6, r7, pc}
+    % PRIM_RETURN (primitive index 1) tail call pattern on armv6m:
+    %   ldr  r7, [r2, #4]   ; load PRIM_RETURN function pointer
+    %   ldr  r6, [sp, #20]  ; load saved LR
+    %   str  r7, [sp, #20]  ; store function ptr as return address
+    %   mov  lr, r6         ; restore LR
+    %   pop  {r1,r4,r5,r6,r7,pc}  ; tail call via popped PC
+    ReturnPattern =
+        <<16#6857:16/little, 16#9e05:16/little, 16#9705:16/little, 16#46b6:16/little,
+            16#bdf2:16/little>>,
 
-    % Check for the first return implementation (call_primitive_last for PRIM_RETURN)
-    ?assertMatch(
-        {_, _},
-        binary:match(
-            CompiledCode,
-            <<16#278c:16/little, 16#6816:16/little, 16#463a:16/little, 16#23ff:16/little,
-                16#33cc:16/little, 16#9f05:16/little, 16#9605:16/little, 16#46be:16/little,
-                16#bdf2:16/little>>
-        )
-    ),
-
-    % Check for tail-call cache jump: ldr r7, [pc, #0] followed by b.n (backward branch)
-    % 29c:	27a7      	movs	r7, #167	; 0xa7
-    % 29e:	00bf      	lsls	r7, r7, #2
-    % 2a0:	e6f4      	b.n	0x8c
-
-    ?assertMatch(
-        {_, _},
-        binary:match(CompiledCode, <<16#27a7:16/little, 16#00bf:16/little, 16#e6f4:16/little>>)
+    % The PRIM_RETURN pattern must appear exactly once in the compiled code.
+    % The module has multiple OP_RETURN opcodes, so if caching works,
+    % subsequent returns jump back to the first instance instead of
+    % duplicating the tail call sequence.
+    {Pos, Len} = binary:match(CompiledCode, ReturnPattern),
+    % Verify there is no second occurrence after the first one
+    ?assertEqual(
+        nomatch,
+        binary:match(CompiledCode, ReturnPattern, [
+            {scope, {Pos + Len, byte_size(CompiledCode) - Pos - Len}}
+        ])
     ),
     ok.

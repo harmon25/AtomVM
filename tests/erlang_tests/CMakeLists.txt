@@ -238,6 +238,7 @@ compile_erlang(prime_ext)
 compile_erlang(prime_smp)
 compile_erlang(test_try_case_end)
 compile_erlang(test_exception_classes)
+compile_erlang(test_erlang_builtins)
 compile_erlang(test_recursion_and_try_catch)
 compile_erlang(test_fun_info)
 compile_erlang(test_func_info)
@@ -354,6 +355,7 @@ compile_erlang(test_binary_split)
 compile_erlang(test_split_binary)
 compile_erlang(test_binary_replace)
 compile_erlang(test_binary_match)
+compile_erlang(test_binary_longest_common_prefix)
 
 compile_erlang(test_zlib_compress)
 
@@ -540,6 +542,14 @@ compile_erlang(test_function_exported)
 compile_erlang(test_list_to_tuple)
 
 compile_erlang(bs_context_byte_size)
+compile_erlang(bs_get_binary_fixed_size)
+compile_erlang(bs_get_integer_fixed_size)
+compile_erlang(bs_get_float_dynamic_size)
+compile_erlang(test_is_not_equal)
+compile_assembler(test_is_not_equal_asm)
+compile_erlang(test_has_map_fields)
+compile_erlang(test_bs_create_bin_accum)
+compile_assembler(test_bs_create_bin_accum_asm)
 compile_erlang(bs_context_to_binary_with_offset)
 compile_erlang(bs_restore2_start_offset)
 compile_erlang(test_refc_binaries)
@@ -613,6 +623,8 @@ compile_assembler(test_op_bs_start_match_asm)
 compile_erlang(test_op_bs_create_bin)
 compile_assembler(test_op_bs_create_bin_asm)
 
+compile_assembler(bs_get_binary2_all_asm)
+
 compile_erlang(bigint)
 compile_erlang(bigint_stress)
 
@@ -621,9 +633,20 @@ compile_erlang(test_lists_member)
 compile_erlang(test_lists_keymember)
 compile_erlang(test_lists_keyfind)
 
+compile_erlang(test_reraise)
+compile_erlang(reraise_reraiser)
+compile_erlang(reraise_raiser)
+
+compile_erlang(stacktrace_function_args)
+compile_erlang(test_multi_value_comprehension)
+compile_erlang(test_is_integer_3)
+
+compile_erlang(test_inline_arith)
+
 if(Erlang_VERSION VERSION_GREATER_EQUAL "23")
     set(OTP23_OR_GREATER_TESTS
         test_op_bs_start_match_asm.beam
+        bs_get_binary2_all_asm.beam
     )
 else()
     set(OTP23_OR_GREATER_TESTS)
@@ -632,10 +655,19 @@ endif()
 if(Erlang_VERSION VERSION_GREATER_EQUAL "25")
     set(OTP25_OR_GREATER_TESTS
         test_op_bs_create_bin_asm.beam
+        test_bs_create_bin_accum_asm.beam
     )
 else()
     set(OTP25_OR_GREATER_TESTS)
 endif()
+
+compile_erlang(test_crypto_pk)
+compile_erlang(test_crypto_mac)
+compile_erlang(test_crypto_hash_update)
+compile_erlang(test_crypto_crypto)
+compile_erlang(test_crypto_pbkdf2_hmac)
+compile_erlang(test_crypto_misc)
+compile_erlang(test_crypto_aead)
 
 set(erlang_test_beams
     add.beam
@@ -764,6 +796,7 @@ set(erlang_test_beams
     prime_smp.beam
     test_try_case_end.beam
     test_exception_classes.beam
+    test_erlang_builtins.beam
     test_recursion_and_try_catch.beam
     test_fun_info.beam
     test_func_info.beam
@@ -881,6 +914,7 @@ set(erlang_test_beams
     test_split_binary.beam
     test_binary_replace.beam
     test_binary_match.beam
+    test_binary_longest_common_prefix.beam
 
     test_zlib_compress.beam
 
@@ -1074,6 +1108,13 @@ set(erlang_test_beams
     test_list_to_tuple.beam
 
     bs_context_byte_size.beam
+    bs_get_binary_fixed_size.beam
+    bs_get_integer_fixed_size.beam
+    bs_get_float_dynamic_size.beam
+    test_is_not_equal.beam
+    test_is_not_equal_asm.beam
+    test_has_map_fields.beam
+    test_bs_create_bin_accum.beam
     bs_context_to_binary_with_offset.beam
     bs_restore2_start_offset.beam
     bs_append_extra_words.beam
@@ -1144,6 +1185,8 @@ set(erlang_test_beams
     test_lists_keymember.beam
     test_lists_keyfind.beam
 
+    test_inline_arith.beam
+
     test_code_server_nifs.beam
 
     test_op_bs_start_match.beam
@@ -1152,8 +1195,25 @@ set(erlang_test_beams
     bigint.beam
     bigint_stress.beam
 
+    test_reraise.beam
+    reraise_reraiser.beam
+    reraise_raiser.beam
+
+    stacktrace_function_args.beam
+
+    test_multi_value_comprehension.beam
+    test_is_integer_3.beam
+
     ${OTP23_OR_GREATER_TESTS}
     ${OTP25_OR_GREATER_TESTS}
+
+    test_crypto_pk.beam
+    test_crypto_mac.beam
+    test_crypto_hash_update.beam
+    test_crypto_crypto.beam
+    test_crypto_pbkdf2_hmac.beam
+    test_crypto_misc.beam
+    test_crypto_aead.beam
 )
 
 if(NOT AVM_DISABLE_JIT)

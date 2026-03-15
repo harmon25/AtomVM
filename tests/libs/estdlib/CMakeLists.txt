@@ -52,6 +52,7 @@ set(ERLANG_MODULES
     test_supervisor
     test_lists_subtraction
     test_file
+    test_filename
     test_tcp_socket
     test_udp_socket
     notify_init_server
@@ -59,4 +60,4 @@ set(ERLANG_MODULES
 )
 
 pack_archive(test_estdlib_lib ${ERLANG_MODULES})
-pack_test(test_estdlib estdlib eavmlib etest)
+pack_test(test_estdlib estdlib eavmlib avm_network etest)

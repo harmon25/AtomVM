@@ -60,6 +60,12 @@ _Static_assert(ALL_ATOM_INDEX == 15, "ALL_ATOM_INDEX is 15 in libs/jit/src/defau
 _Static_assert(LOWERCASE_EXIT_ATOM_INDEX == 16, "LOWERCASE_EXIT_ATOM_INDEX is 16 in libs/jit/src/default_atoms.hrl ");
 _Static_assert(BADRECORD_ATOM_INDEX == 17, "BADRECORD_ATOM_INDEX is 17 in libs/jit/src/default_atoms.hrl ");
 
+// Verify n_words constants in primitives.hrl
+_Static_assert(
+    CALL_EXT_NO_DEALLOC == -1, "CALL_EXT_NO_DEALLOC is -1 in libs/jit/src/primitives.hrl");
+_Static_assert(
+    CALL_EXT_NO_DEALLOC_MFA == -2, "CALL_EXT_NO_DEALLOC_MFA is -2 in libs/jit/src/primitives.hrl");
+
 // Verify offsets in jit_x86_64.erl
 #if JIT_ARCH_TARGET == JIT_ARCH_X86_64 || JIT_ARCH_TARGET == JIT_ARCH_AARCH64
 _Static_assert(offsetof(Context, e) == 0x28, "ctx->e is 0x28 in jit/src/jit_{aarch64,x86_64}.erl");
@@ -126,6 +132,21 @@ _Static_assert(sizeof(avm_float_t) == 0x8, "sizeof(avm_float_t) is 0x8 for doubl
         } else {                                                                \
             return jit_schedule_wait_cp(jit_return(ctx, jit_state), jit_state); \
         }                                                                       \
+    }
+
+#define PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST_MFA(return_value, offset, m, i, a)           \
+    if (term_is_invalid_term(return_value)) {                                             \
+        if (UNLIKELY(!context_get_flags(ctx, Trap))) {                                    \
+            term module_atom;                                                             \
+            term function_atom;                                                           \
+            module_get_imported_function_module_and_name_atoms(                           \
+                (m), (i), &module_atom, &function_atom);                                  \
+            ctx->exception_stacktrace = stacktrace_create_raw_mfa(ctx, jit_state->module, \
+                (offset), module_atom, function_atom, (a));                               \
+            return jit_handle_error(ctx, jit_state, 0);                                   \
+        } else {                                                                          \
+            return jit_schedule_wait_cp(jit_return(ctx, jit_state), jit_state);           \
+        }                                                                                 \
     }
 
 #ifndef MIN
@@ -200,10 +221,20 @@ static Context *jit_terminate_context(Context *ctx, JITState *jit_state)
 
 static Context *jit_handle_error(Context *ctx, JITState *jit_state, int offset)
 {
-    TRACE("jit_terminate_context: ctx->process_id = %" PRId32 ", offset = %d\n", ctx->process_id, offset);
-    if (offset || term_is_invalid_term(ctx->x[2])) {
-        ctx->x[2] = stacktrace_create_raw(ctx, jit_state->module, offset, ctx->x[0]);
+    TRACE("jit_handle_error: ctx->process_id = %" PRId32 ", offset = %d\n", ctx->process_id, offset);
+    if (offset || term_is_invalid_term(ctx->exception_stacktrace)) {
+        ctx->exception_stacktrace
+            = stacktrace_create_raw(ctx, jit_state->module, offset);
     }
+
+    // Copy exception fields to x registers and clear them
+    ctx->x[0] = context_exception_class(ctx);
+    ctx->x[1] = ctx->exception_reason;
+    ctx->x[2] = ctx->exception_stacktrace;
+    context_set_exception_class(ctx, term_nil());
+    ctx->exception_reason = term_nil();
+    ctx->exception_stacktrace = term_nil();
+
     int target_label = context_get_catch_label(ctx, &jit_state->module);
     if (target_label) {
         if (jit_state->module->native_code) {
@@ -258,12 +289,13 @@ static Context *jit_handle_error(Context *ctx, JITState *jit_state, int offset)
 
 static void set_error(Context *ctx, JITState *jit_state, int offset, term error_term)
 {
-    ctx->x[0] = ERROR_ATOM;
-    ctx->x[1] = error_term;
+    context_set_exception_class(ctx, ERROR_ATOM);
+    ctx->exception_reason = error_term;
     if (offset) {
-        ctx->x[2] = stacktrace_create_raw(ctx, jit_state->module, offset, ERROR_ATOM);
+        ctx->exception_stacktrace
+            = stacktrace_create_raw(ctx, jit_state->module, offset);
     } else {
-        ctx->x[2] = term_invalid_term();
+        ctx->exception_stacktrace = term_invalid_term();
     }
 }
 
@@ -271,6 +303,20 @@ static Context *jit_raise_error(Context *ctx, JITState *jit_state, int offset, t
 {
     TRACE("jit_raise_error: ctx->process_id = %" PRId32 ", offset = %d\n", ctx->process_id, offset);
     set_error(ctx, jit_state, offset, error_type_atom);
+    return jit_handle_error(ctx, jit_state, 0);
+}
+
+static Context *jit_raise_error_mfa(
+    Context *ctx, JITState *jit_state, int offset, int function_atom_index, int arity)
+{
+    TRACE("jit_raise_error_mfa: ctx->process_id = %" PRId32 ", offset = %d\n", ctx->process_id,
+        offset);
+    term module_atom = module_get_name(jit_state->module);
+    term function_atom = module_get_atom_term_by_id(jit_state->module, function_atom_index);
+    context_set_exception_class_use_live_flag(ctx, ERROR_ATOM);
+    ctx->exception_reason = FUNCTION_CLAUSE_ATOM;
+    ctx->exception_stacktrace = stacktrace_create_raw_mfa(
+        ctx, jit_state->module, offset, module_atom, function_atom, arity);
     return jit_handle_error(ctx, jit_state, 0);
 }
 
@@ -291,12 +337,21 @@ static Context *jit_raise_error_tuple(Context *ctx, JITState *jit_state, int off
     return jit_handle_error(ctx, jit_state, 0);
 }
 
-static Context *jit_raise(Context *ctx, JITState *jit_state, int offset, term stacktrace, term exc_value)
+static Context *jit_raise(Context *ctx, JITState *jit_state, term stacktrace, term exc_value)
 {
-    TRACE("jit_raise: ctx->process_id = %" PRId32 ", offset = %d\n", ctx->process_id, offset);
-    ctx->x[0] = stacktrace_exception_class(stacktrace);
-    ctx->x[1] = exc_value;
-    ctx->x[2] = stacktrace_create_raw(ctx, jit_state->module, offset, stacktrace);
+    TRACE("jit_raise: ctx->process_id = %" PRId32 "\n", ctx->process_id);
+    context_set_exception_class(ctx, stacktrace_exception_class(stacktrace));
+    ctx->exception_reason = exc_value;
+    ctx->exception_stacktrace = stacktrace;
+    return jit_handle_error(ctx, jit_state, 0);
+}
+
+static Context *jit_raw_raise(Context *ctx, JITState *jit_state)
+{
+    TRACE("jit_raw_raise: ctx->process_id = %" PRId32 "\n", ctx->process_id);
+    context_set_exception_class(ctx, ctx->x[0]);
+    ctx->exception_reason = ctx->x[1];
+    ctx->exception_stacktrace = ctx->x[2];
     return jit_handle_error(ctx, jit_state, 0);
 }
 
@@ -356,7 +411,19 @@ static Context *jit_call_ext(Context *ctx, JITState *jit_state, int offset, int 
         case NIFFunctionType: {
             const struct Nif *nif = EXPORTED_FUNCTION_TO_NIF(func);
             term return_value = nif->nif_ptr(ctx, arity, ctx->x);
-            PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value, offset);
+            if (UNLIKELY(term_is_invalid_term(return_value))) {
+                if (n_words == CALL_EXT_NO_DEALLOC_MFA) {
+                    // CALL_EXT_NO_DEALLOC_MFA uses MFA enriched error handling
+                    // like the emulator's
+                    // PROCESS_MAYBE_TRAP_RETURN_VALUE_RESTORE_PC_INDEX_ARITY.
+                    PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST_MFA(
+                        return_value, offset, jit_state->module, index, arity);
+                } else {
+                    // CALL_EXT_NO_DEALLOC (CALL_EXT_ONLY) or n_words >= 0
+                    // (CALL_EXT_LAST) use the regular error path.
+                    PROCESS_MAYBE_TRAP_RETURN_VALUE_LAST(return_value, offset);
+                }
+            }
             ctx->x[0] = return_value;
 
             // We deallocate after (instead of before) as a
@@ -593,9 +660,7 @@ static term jit_alloc_boxed_integer_fragment(Context *ctx, avm_int64_t value)
     if ((value < AVM_INT_MIN) || (value > AVM_INT_MAX)) {
         Heap heap;
         if (UNLIKELY(memory_init_heap(&heap, BOXED_INT64_SIZE) != MEMORY_GC_OK)) {
-            ctx->x[0] = ERROR_ATOM;
-            ctx->x[1] = OUT_OF_MEMORY_ATOM;
-            return term_invalid_term();
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         memory_heap_append_heap(&ctx->heap, &heap);
 
@@ -604,9 +669,7 @@ static term jit_alloc_boxed_integer_fragment(Context *ctx, avm_int64_t value)
 #endif
     Heap heap;
     if (UNLIKELY(memory_init_heap(&heap, BOXED_INT_SIZE) != MEMORY_GC_OK)) {
-        ctx->x[0] = ERROR_ATOM;
-        ctx->x[1] = OUT_OF_MEMORY_ATOM;
-        return term_invalid_term();
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
     memory_heap_append_heap(&ctx->heap, &heap);
 
@@ -619,9 +682,7 @@ static term maybe_alloc_boxed_integer_fragment(Context *ctx, avm_int64_t value)
     if ((value < AVM_INT_MIN) || (value > AVM_INT_MAX)) {
         Heap heap;
         if (UNLIKELY(memory_init_heap(&heap, BOXED_INT64_SIZE) != MEMORY_GC_OK)) {
-            ctx->x[0] = ERROR_ATOM;
-            ctx->x[1] = OUT_OF_MEMORY_ATOM;
-            return term_invalid_term();
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         memory_heap_append_heap(&ctx->heap, &heap);
 
@@ -631,9 +692,7 @@ static term maybe_alloc_boxed_integer_fragment(Context *ctx, avm_int64_t value)
         if ((value < MIN_NOT_BOXED_INT) || (value > MAX_NOT_BOXED_INT)) {
         Heap heap;
         if (UNLIKELY(memory_init_heap(&heap, BOXED_INT_SIZE) != MEMORY_GC_OK)) {
-            ctx->x[0] = ERROR_ATOM;
-            ctx->x[1] = OUT_OF_MEMORY_ATOM;
-            return term_invalid_term();
+            RAISE_ERROR(OUT_OF_MEMORY_ATOM);
         }
         memory_heap_append_heap(&ctx->heap, &heap);
 
@@ -655,9 +714,7 @@ static term jit_alloc_big_integer_fragment(
     term_bigint_size_requirements(digits_len, &intn_data_size, &rounded_res_len);
 
     if (UNLIKELY(memory_init_heap(&heap, BOXED_BIGINT_HEAP_SIZE(intn_data_size)) != MEMORY_GC_OK)) {
-        ctx->x[0] = ERROR_ATOM;
-        ctx->x[1] = OUT_OF_MEMORY_ATOM;
-        return term_invalid_term();
+        RAISE_ERROR(OUT_OF_MEMORY_ATOM);
     }
 
     term bigint_term
@@ -888,6 +945,7 @@ static Context *jit_process_signal_messages(Context *ctx, JITState *jit_state)
 static term jit_mailbox_peek(Context *ctx)
 {
     TRACE("jit_mailbox_peek: ctx->process_id=%" PRId32 "\n", ctx->process_id);
+    ctx->mailbox.receive_has_match_clauses = true;
     term out = term_invalid_term();
     mailbox_peek(ctx, &out);
     return out;
@@ -897,12 +955,14 @@ static void jit_mailbox_remove_message(Context *ctx)
 {
     TRACE("jit_mailbox_remove_message: ctx->process_id=%" PRId32 "\n", ctx->process_id);
     mailbox_remove_message(&ctx->mailbox, &ctx->heap);
+    ctx->mailbox.receive_has_match_clauses = false;
 }
 
 static void jit_timeout(Context *ctx)
 {
     TRACE("jit_timeout: ctx->process_id=%" PRId32 "\n", ctx->process_id);
     context_update_flags(ctx, ~WaitingTimeoutExpired, NoFlags);
+    ctx->mailbox.receive_has_match_clauses = false;
     mailbox_reset(&ctx->mailbox);
 }
 
@@ -952,18 +1012,23 @@ static Context *jit_wait_timeout(Context *ctx, JITState *jit_state, term timeout
         needs_to_wait = 1;
     } else if (context_get_flags(ctx, WaitingTimeout) != 0) {
         needs_to_wait = 1;
-    } else if (!mailbox_has_next(&ctx->mailbox)) {
-        needs_to_wait = 1;
     }
+    // else: WaitingTimeoutExpired -- fall through to timeout.
+    // Any messages in the mailbox are left for the next receive.
 
     if (needs_to_wait) {
+        // Signal processing may have moved messages to the inner list.
+        // If there are match clauses (loop_rec was executed), jump to
+        // loop_rec to scan them.
+        if (ctx->mailbox.receive_has_match_clauses && mailbox_has_next(&ctx->mailbox)) {
+            jit_state->continuation = module_get_native_entry_point(jit_state->module, label);
+            return ctx;
+        }
         return jit_schedule_wait_cp(ctx, jit_state);
-    } else {
-        // clang cannot tail-optimize this, so return to loop to avoid any stack overflow
-        // __attribute__((musttail)) return jit_state->continuation(ctx, jit_state, &module_native_interface);
-        jit_state->continuation = module_get_native_entry_point(jit_state->module, label);
-        return ctx;
     }
+    // else: timer expired, fall through to timeout
+    // jit_state->continuation already points to the trap handler code
+    return ctx;
 }
 
 static Context *jit_wait_timeout_trap_handler(Context *ctx, JITState *jit_state, int label)
@@ -976,6 +1041,7 @@ static Context *jit_wait_timeout_trap_handler(Context *ctx, JITState *jit_state,
         return scheduler_wait(ctx);
     }
 
+    // Messages available, jump to loop_rec to scan them.
     jit_state->continuation = module_get_native_entry_point(jit_state->module, label);
     return ctx;
 }
@@ -1269,14 +1335,9 @@ static term jit_term_alloc_bin_match_state(Context *ctx, term src, int slots)
     return term_alloc_bin_match_state(src, slots, &ctx->heap);
 }
 
-static term extract_bigint(Context *ctx, JITState *jit_state, const uint8_t *bytes,
-    size_t bytes_size, intn_from_integer_options_t opts)
+static term make_bigint_from_digits(
+    Context *ctx, JITState *jit_state, intn_digit_t *bigint, intn_integer_sign_t sign, int count)
 {
-    intn_integer_sign_t sign;
-    intn_digit_t bigint[INTN_MAX_RES_LEN];
-    int count = intn_from_integer_bytes(bytes, bytes_size, opts, bigint, &sign);
-    // count will be always >= 0, caller ensures that bits <= INTN_MAX_UNSIGNED_BITS_SIZE
-
     size_t intn_data_size;
     size_t rounded_res_len;
     term_bigint_size_requirements(count, &intn_data_size, &rounded_res_len);
@@ -1296,6 +1357,17 @@ static term extract_bigint(Context *ctx, JITState *jit_state, const uint8_t *byt
     return bigint_term;
 }
 
+static term extract_bigint(Context *ctx, JITState *jit_state, const uint8_t *bytes,
+    size_t bytes_size, intn_from_integer_options_t opts)
+{
+    intn_integer_sign_t sign;
+    intn_digit_t bigint[INTN_MAX_RES_LEN];
+    int count = intn_from_integer_bytes(bytes, bytes_size, opts, bigint, &sign);
+    // count will be always >= 0, caller ensures that bits <= INTN_MAX_UNSIGNED_BITS_SIZE
+
+    return make_bigint_from_digits(ctx, jit_state, bigint, sign, count);
+}
+
 static term jit_bitstring_extract_integer(
     Context *ctx, JITState *jit_state, term *bin_ptr, size_t offset, int n, int bs_flags)
 {
@@ -1304,17 +1376,28 @@ static term jit_bitstring_extract_integer(
     if (n <= 64) {
         union maybe_unsigned_int64 value;
         bool status = bitstring_extract_integer(
-            ((term) bin_ptr) | TERM_PRIMARY_BOXED, offset, n, bs_flags, &value);
+            (term) (((uintptr_t) bin_ptr) | TERM_PRIMARY_BOXED), offset, n, bs_flags, &value);
         if (UNLIKELY(!status)) {
             return FALSE_ATOM;
         }
-        term t = maybe_alloc_boxed_integer_fragment(ctx, value.s);
+
+        term t;
+        if ((bs_flags & SignedInteger) || (value.u <= INT64_MAX)) {
+            t = maybe_alloc_boxed_integer_fragment(ctx, value.s);
+        } else {
+            intn_digit_t int_buf[INTN_UINT64_LEN];
+            intn_from_uint64(value.u, int_buf);
+            t = make_bigint_from_digits(
+                ctx, jit_state, int_buf, IntNPositiveInteger, INTN_UINT64_LEN);
+        }
+
         if (UNLIKELY(term_is_invalid_term(t))) {
             set_error(ctx, jit_state, 0, OUT_OF_MEMORY_ATOM);
         }
+
         return t;
     } else if ((offset % 8 == 0) && (n % 8 == 0) && (n <= INTN_MAX_UNSIGNED_BITS_SIZE)) {
-        term bs_bin = ((term) bin_ptr) | TERM_PRIMARY_BOXED;
+        term bs_bin = (term) (((uintptr_t) bin_ptr) | TERM_PRIMARY_BOXED);
         unsigned long capacity = term_binary_size(bs_bin);
         if (8 * capacity - offset < (unsigned long) n) {
             return FALSE_ATOM;
@@ -1336,13 +1419,13 @@ static term jit_bitstring_extract_float(Context *ctx, term *bin_ptr, size_t offs
     bool status;
     switch (n) {
         case 16:
-            status = bitstring_extract_f16(((term) bin_ptr) | TERM_PRIMARY_BOXED, offset, n, bs_flags, &value);
+            status = bitstring_extract_f16((term) (((uintptr_t) bin_ptr) | TERM_PRIMARY_BOXED), offset, n, bs_flags, &value);
             break;
         case 32:
-            status = bitstring_extract_f32(((term) bin_ptr) | TERM_PRIMARY_BOXED, offset, n, bs_flags, &value);
+            status = bitstring_extract_f32((term) (((uintptr_t) bin_ptr) | TERM_PRIMARY_BOXED), offset, n, bs_flags, &value);
             break;
         case 64:
-            status = bitstring_extract_f64(((term) bin_ptr) | TERM_PRIMARY_BOXED, offset, n, bs_flags, &value);
+            status = bitstring_extract_f64((term) (((uintptr_t) bin_ptr) | TERM_PRIMARY_BOXED), offset, n, bs_flags, &value);
             break;
         default:
             status = false;
@@ -1355,7 +1438,7 @@ static term jit_bitstring_extract_float(Context *ctx, term *bin_ptr, size_t offs
 
 static size_t jit_term_sub_binary_heap_size(term *bin_ptr, size_t size)
 {
-    term binary = ((term) bin_ptr) | TERM_PRIMARY_BOXED;
+    term binary = (term) (((uintptr_t) bin_ptr) | TERM_PRIMARY_BOXED);
     TRACE("jit_term_sub_binary_heap_size: binary=%p size=%d\n", (void *) binary, (int) size);
     return term_sub_binary_heap_size(binary, size);
 }
@@ -1450,8 +1533,30 @@ static int jit_bitstring_insert_utf16(term bin, size_t offset, int c, enum Bitst
 
 static bool jit_bitstring_insert_integer(term bin, size_t offset, term value, size_t n, enum BitstringFlags flags)
 {
-    avm_uint64_t int_value = term_maybe_unbox_int64(value);
-    return bitstring_insert_integer(bin, offset, int_value, n, flags);
+
+    if (term_is_int(value) || term_boxed_size(value) <= BOXED_TERMS_REQUIRED_FOR_INT64) {
+
+        avm_uint64_t int_value = term_maybe_unbox_int64(value);
+        return bitstring_insert_integer(bin, offset, int_value, n, flags);
+
+    } else {
+        const intn_digit_t *big_src_value = NULL;
+        size_t big_len = 0;
+        intn_integer_sign_t big_sign;
+
+        term_to_bigint(value, &big_src_value, &big_len, &big_sign);
+
+        // when building a binary, `signed` flag is implicit
+        intn_from_integer_options_t intn_flags = bitstring_flags_to_intn_opts(flags);
+        int byte_offset = offset / 8;
+        uint8_t *dst = (uint8_t *) term_binary_data(bin) + byte_offset;
+        size_t t_capacity = term_binary_size(bin);
+        size_t avail = t_capacity - byte_offset;
+
+        int written
+            = intn_to_integer_bytes(big_src_value, big_len, big_sign, intn_flags, dst, avail);
+        return written > 0;
+    }
 }
 
 static bool jit_bitstring_insert_float(term bin, size_t offset, term value, size_t n, enum BitstringFlags flags)
@@ -1857,7 +1962,9 @@ const ModuleNativeInterface module_native_interface = {
     jit_stacktrace_build,
     jit_term_reuse_binary,
     jit_alloc_big_integer_fragment,
-    jit_bitstring_insert_float
+    jit_bitstring_insert_float,
+    jit_raw_raise,
+    jit_raise_error_mfa
 };
 
 #endif

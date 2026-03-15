@@ -24,6 +24,17 @@ include(BuildElixir)
 
 set(TEST_MODULES
     Some.Submodule
+    GenServerTest.Stack
+    GenServerTest.CustomStack
+    SupervisorTest.Stack
+    SupervisorTest.Stack.Sup
 )
 
 pack_test(Tests Tests ${TEST_MODULES})
+
+# alisp is not in pack_test's standard library list but is needed by exavmlib tests
+add_custom_command(
+    OUTPUT Tests.avm
+    DEPENDS ${CMAKE_BINARY_DIR}/libs/alisp/src/alisp.avm alisp
+    APPEND
+)
