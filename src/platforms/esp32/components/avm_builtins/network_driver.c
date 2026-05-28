@@ -99,6 +99,17 @@ static const char *const sta_beacon_timeout_atom = ATOM_STR("\x12", "sta_beacon_
 static const char *const sta_disconnected_atom = ATOM_STR("\x10", "sta_disconnected");
 static const char *const sta_got_ip_atom = ATOM_STR("\xA", "sta_got_ip");
 static const char *const network_down_atom = ATOM_STR("\x0C", "network_down");
+static const char *const deferred_atom = ATOM_STR("\x8", "deferred");
+static const char *const pending_atom = ATOM_STR("\x7", "pending");
+static const char *const tx_power_atom = ATOM_STR("\x8", "tx_power");
+static const char *const wifi_not_started_atom = ATOM_STR("\x10", "wifi_not_started");
+
+// Cache for deferred TX power: applied after esp_wifi_start(), survives stop/start cycles.
+// wifi_started tracks whether esp_wifi_start() has succeeded; calling esp_wifi_set_max_tx_power
+// before esp_wifi_init/start hard-crashes the device rather than returning an error code.
+static bool tx_power_pending = false;
+static int8_t tx_power_cached = 0;
+static bool wifi_started = false;
 
 ESP_EVENT_DECLARE_BASE(sntp_event_base);
 ESP_EVENT_DEFINE_BASE(sntp_event_base);
@@ -117,7 +128,9 @@ enum network_cmd
     StaHaltCmd,
     StaConnectCmd,
     NetworkScanCmd,
-    NetworkScanStopCmd
+    NetworkScanStopCmd,
+    NetworkSetTxPowerCmd,
+    NetworkGetTxPowerCmd
 };
 
 static const AtomStringIntPair cmd_table[] = {
@@ -128,6 +141,8 @@ static const AtomStringIntPair cmd_table[] = {
     { ATOM_STR("\x7", "connect"), StaConnectCmd },
     { ATOM_STR("\x4", "scan"), NetworkScanCmd },
     { ATOM_STR("\xB", "cancel_scan"), NetworkScanStopCmd },
+    { ATOM_STR("\xC", "set_tx_power"), NetworkSetTxPowerCmd },
+    { ATOM_STR("\xC", "get_tx_power"), NetworkGetTxPowerCmd },
     SELECT_INT_DEFAULT(NetworkInvalidCmd)
 };
 
@@ -1350,6 +1365,33 @@ static void start_network(Context *ctx, term pid, term ref, term config)
         goto cleanup;
     } else {
         ESP_LOGI(TAG, "WIFI started");
+        wifi_started = true;
+    }
+
+    //
+    // Apply TX power from start config (takes precedence over any previously staged value)
+    //
+    term tx_power_cfg = interop_kv_get_value(config, tx_power_atom, ctx->global);
+    if (!term_is_invalid_term(tx_power_cfg) && term_is_integer(tx_power_cfg)) {
+        int power_int = term_to_int(tx_power_cfg);
+        if (power_int >= 8 && power_int <= 84) {
+            tx_power_cached = (int8_t) power_int;
+            tx_power_pending = true;
+        } else {
+            ESP_LOGW(TAG, "Ignoring out-of-range tx_power in start config: %d", power_int);
+        }
+    }
+
+    //
+    // Reapply any cached TX power setting (survives stop/start cycles)
+    //
+    if (tx_power_pending) {
+        esp_err_t tx_err = esp_wifi_set_max_tx_power(tx_power_cached);
+        if (tx_err == ESP_OK) {
+            ESP_LOGI(TAG, "Reapplied cached WiFi TX power: %d (0.25 dBm units)", tx_power_cached);
+        } else {
+            ESP_LOGE(TAG, "Failed to reapply cached WiFi TX power: %d", tx_err);
+        }
     }
 
     //
@@ -1402,6 +1444,7 @@ static void stop_network(Context *ctx)
     }
 
     // Stop and deinit the WiFi driver, these only return OK, or not init error (fine to ignore).
+    wifi_started = false;
     esp_wifi_stop();
     esp_wifi_deinit();
 
@@ -1875,6 +1918,77 @@ static void cancel_scan(Context *ctx, term pid, term ref, term reply_config)
     return;
 }
 
+static void set_wifi_tx_power(Context *ctx, term pid, term ref, term power_term)
+{
+    if (UNLIKELY(!term_is_integer(power_term))) {
+        port_ensure_available(ctx, PORT_REPLY_SIZE + TUPLE_SIZE(2));
+        port_send_reply(ctx, pid, ref, port_create_error_tuple(ctx, BADARG_ATOM));
+        return;
+    }
+
+    int power_int = term_to_int(power_term);
+    if (UNLIKELY(power_int < 8 || power_int > 84)) {
+        port_ensure_available(ctx, PORT_REPLY_SIZE + TUPLE_SIZE(2));
+        port_send_reply(ctx, pid, ref, port_create_error_tuple(ctx, BADARG_ATOM));
+        return;
+    }
+
+    int8_t power = (int8_t) power_int;
+    tx_power_cached = power;
+    tx_power_pending = true;
+
+    if (!wifi_started) {
+        // esp_wifi_set_max_tx_power requires esp_wifi_start; calling it earlier crashes the
+        // device. Stage the value and apply it in start_network after esp_wifi_start.
+        ESP_LOGI(TAG, "WiFi TX power %d staged; will apply after esp_wifi_start", power);
+        // Reply: {Ref, {ok, deferred}}
+        port_ensure_available(ctx, PORT_REPLY_SIZE + TUPLE_SIZE(2));
+        term reply = port_create_ok_tuple(ctx, make_atom(ctx->global, deferred_atom));
+        port_send_reply(ctx, pid, ref, reply);
+        return;
+    }
+
+    esp_err_t err = esp_wifi_set_max_tx_power(power);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "WiFi TX power set to %d (0.25 dBm units)", power);
+        port_ensure_available(ctx, PORT_REPLY_SIZE);
+        port_send_reply(ctx, pid, ref, OK_ATOM);
+    } else {
+        ESP_LOGE(TAG, "Failed to set WiFi TX power: %d", err);
+        tx_power_pending = false;
+        port_ensure_available(ctx, PORT_REPLY_SIZE + TUPLE_SIZE(2));
+        port_send_reply(ctx, pid, ref, port_create_error_tuple(ctx, term_from_int(err)));
+    }
+}
+
+static void get_wifi_tx_power(Context *ctx, term pid, term ref)
+{
+    if (wifi_started) {
+        int8_t power = 0;
+        esp_err_t err = esp_wifi_get_max_tx_power(&power);
+        if (err == ESP_OK) {
+            // Reply: {Ref, {ok, Power}}
+            port_ensure_available(ctx, PORT_REPLY_SIZE + TUPLE_SIZE(2));
+            term reply = port_create_ok_tuple(ctx, term_from_int(power));
+            port_send_reply(ctx, pid, ref, reply);
+            return;
+        }
+        // Fall through to pending/error handling if get fails despite wifi_started
+    }
+    if (tx_power_pending) {
+        // Reply: {Ref, {ok, {pending, CachedPower}}}
+        port_ensure_available(ctx, PORT_REPLY_SIZE + TUPLE_SIZE(2) + TUPLE_SIZE(2));
+        term pending_tuple = port_create_tuple2(ctx, make_atom(ctx->global, pending_atom), term_from_int(tx_power_cached));
+        term reply = port_create_ok_tuple(ctx, pending_tuple);
+        port_send_reply(ctx, pid, ref, reply);
+    } else {
+        // Reply: {Ref, {error, wifi_not_started}}
+        port_ensure_available(ctx, PORT_REPLY_SIZE + TUPLE_SIZE(2));
+        term error = port_create_error_tuple(ctx, make_atom(ctx->global, wifi_not_started_atom));
+        port_send_reply(ctx, pid, ref, error);
+    }
+}
+
 static NativeHandlerResult consume_mailbox(Context *ctx)
 {
     bool cmd_terminate = false;
@@ -1929,6 +2043,12 @@ static NativeHandlerResult consume_mailbox(Context *ctx)
                 } else {
                     sta_connect(ctx, pid, ref, config);
                 }
+                break;
+            case NetworkSetTxPowerCmd:
+                set_wifi_tx_power(ctx, pid, ref, config);
+                break;
+            case NetworkGetTxPowerCmd:
+                get_wifi_tx_power(ctx, pid, ref);
                 break;
 
             default: {

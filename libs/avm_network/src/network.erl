@@ -29,7 +29,9 @@
     sta_disconnect/0,
     sta_connect/0, sta_connect/1,
     sta_status/0,
-    wifi_scan/0, wifi_scan/1
+    wifi_scan/0, wifi_scan/1,
+    set_tx_power/1,
+    get_tx_power/0
 ]).
 -export([start/1, start_link/1, stop/0]).
 -export([
@@ -200,12 +202,36 @@
     | mdns_ttl_config().
 -type mdns_config() :: {mdns, [mdns_config_property()]}.
 
--type network_config() :: [sta_config() | ap_config() | sntp_config() | mdns_config()].
+-type tx_power_config() :: {tx_power, tx_power()}.
+%% Optional top-level TX power setting. The value is applied immediately after `esp_wifi_start'
+%% and is equivalent to calling `set_tx_power/1' before the network has fully connected.
+%% Aliases (`min', `low', `default', `high', `max') are resolved to integer values before the
+%% config is forwarded to the driver.
+
+-type network_config() :: [sta_config() | ap_config() | sntp_config() | mdns_config() | tx_power_config()].
 
 -type dbm() :: integer().
 %% `dbm()' decibel-milliwatts (or dBm) will typically be a negative number, but in the presence of
 %% a powerful signal this can be a positive number. A level of 0 dBm corresponds to the power of 1
 %% milliwatt. A 10 dBm decrease in level is equivalent to a ten-fold decrease in signal power.
+
+-type tx_power_value() :: 8..84.
+%% WiFi TX power in 0.25 dBm units, range [8, 84] corresponding to 2 dBm - 20 dBm.
+%% Note: ESP-IDF quantises the value to a set of discrete levels; see the ESP-IDF documentation
+%% for `esp_wifi_set_max_tx_power' for the exact mapping.
+
+-type tx_power_alias() :: min | low | default | high | max.
+%% Convenience aliases for common TX power levels:
+%% <ul>
+%%   <li>`min'     -  8 (2.0 dBm)</li>
+%%   <li>`low'     - 34 (8.5 dBm)</li>
+%%   <li>`default' - 78 (19.5 dBm, ESP-IDF default)</li>
+%%   <li>`high'    - 80 (20.0 dBm)</li>
+%%   <li>`max'     - 84 (21.0 dBm)</li>
+%% </ul>
+
+-type tx_power() :: tx_power_value() | tx_power_alias().
+
 -type sta_status() ::
     associated | connected | connecting | degraded | disconnected | disconnecting | inactive.
 
@@ -503,6 +529,120 @@ sta_rssi() ->
     end.
 
 %%-----------------------------------------------------------------------------
+%% @param    Power is a `tx_power()' value: either an integer in the range
+%%           [8, 84] (units of 0.25 dBm) or one of the atoms `min', `low',
+%%           `default', `high', `max'.
+%% @returns  `ok' if the power was applied immediately, `{ok, deferred}' if
+%%           WiFi has not been started yet (the value is cached and will be
+%%           applied automatically after `esp_wifi_start'), or
+%%           `{error, Reason}' on failure.
+%%
+%% @doc Set the maximum WiFi TX power.
+%%
+%% This function requires the network port to be running (i.e. `network:start/1'
+%% or `network:start_link/1' must have been called first). To configure TX power
+%% before starting the network, pass `{tx_power, Value}' as a top-level key in
+%% the `network_config()' given to `network:start/1':
+%%
+%% ```
+%%   network:start_link([{tx_power, low}, {sta, [{ssid, "MyNet"}, ...]}])
+%% '''
+%%
+%% When called after `network:start/1' but before WiFi has connected, the
+%% requested power level is staged and applied automatically once
+%% `esp_wifi_start' is called internally. The cached value persists across
+%% `stop'/`start' cycles for the lifetime of the VM process.
+%%
+%% Power is expressed in 0.25 dBm units ([8, 84] = 2 dBm - 20 dBm).
+%% ESP-IDF quantises the set value to a discrete level; see:
+%% https://docs.espressif.com/projects/esp-techpedia/en/latest/esp-friends/advanced-development/performance/modify-tx-power.html
+%%
+%% Convenience aliases:
+%% <ul>
+%%   <li>`min'     ->  8 (2.0 dBm)</li>
+%%   <li>`low'     -> 34 (8.5 dBm)</li>
+%%   <li>`default' -> 78 (19.5 dBm)</li>
+%%   <li>`high'    -> 80 (20.0 dBm)</li>
+%%   <li>`max'     -> 84 (21.0 dBm)</li>
+%% </ul>
+%%
+%% This function is only supported on ESP32 targets. On other platforms it
+%% returns `{error, network_down}'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec set_tx_power(tx_power()) -> ok | {ok, deferred} | {error, Reason :: term()}.
+set_tx_power(Power) ->
+    case whereis(network_port) of
+        undefined ->
+            {error, network_down};
+        Port ->
+            Ref = make_ref(),
+            Port ! {self(), Ref, {set_tx_power, resolve_tx_power(Power)}},
+            receive
+                {Ref, ok} -> ok;
+                {Ref, {ok, deferred}} -> {ok, deferred};
+                {Ref, {error, Reason}} -> {error, Reason};
+                Other -> {error, Other}
+            end
+    end.
+
+%%-----------------------------------------------------------------------------
+%% @returns `{ok, Power}' where Power is the live TX power in 0.25 dBm units,
+%%          `{ok, {pending, Power}}' if WiFi is not yet started but a value
+%%          has been staged via `set_tx_power/1', or `{error, Reason}' if WiFi
+%%          has not been started and no value has been staged.
+%%
+%% @doc Get the current maximum WiFi TX power.
+%%
+%% When WiFi is running, returns the live value from the radio.
+%% When WiFi is not yet started, returns the staged value (if any) wrapped in
+%% `{pending, Power}', or `{error, wifi_not_started}' if no value has been
+%% staged.
+%%
+%% This function is only supported on ESP32 targets. On other platforms it
+%% returns `{error, network_down}'.
+%% @end
+%%-----------------------------------------------------------------------------
+-spec get_tx_power() ->
+    {ok, tx_power_value()}
+    | {ok, {pending, tx_power_value()}}
+    | {error, Reason :: term()}.
+get_tx_power() ->
+    case whereis(network_port) of
+        undefined ->
+            {error, network_down};
+        Port ->
+            Ref = make_ref(),
+            Port ! {self(), Ref, get_tx_power},
+            receive
+                {Ref, {ok, Power}} -> {ok, Power};
+                {Ref, {ok, {pending, Power}}} -> {ok, {pending, Power}};
+                {Ref, {error, Reason}} -> {error, Reason};
+                Other -> {error, Other}
+            end
+    end.
+
+%% @private
+resolve_tx_power(min)     -> 8;
+resolve_tx_power(low)     -> 34;
+resolve_tx_power(default) -> 78;
+resolve_tx_power(high)    -> 80;
+resolve_tx_power(max)     -> 84;
+resolve_tx_power(N) when is_integer(N), N >= 8, N =< 84 -> N.
+
+%% @private
+%% Resolve any tx_power alias in the top-level network config to an integer so the C driver
+%% receives a plain integer it can read with term_to_int.
+normalize_tx_power(Config) ->
+    case proplists:get_value(tx_power, Config) of
+        undefined ->
+            Config;
+        Value ->
+            Resolved = resolve_tx_power(Value),
+            [{tx_power, Resolved} | proplists:delete(tx_power, Config)]
+    end.
+
+%%-----------------------------------------------------------------------------
 %% @returns ConnectionState :: sta_status().
 %%
 %% @doc Get the connection status of the sta interface.
@@ -704,7 +844,8 @@ init(Config) ->
                         disconnected
                 end
         end,
-    {ok, #state{config = Config, port = Port, ref = Ref, sta_state = Status},
+    NormalizedConfig = normalize_tx_power(Config),
+    {ok, #state{config = NormalizedConfig, port = Port, ref = Ref, sta_state = Status},
         {continue, start_port}}.
 
 %% @hidden
