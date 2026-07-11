@@ -303,6 +303,64 @@ defmodule Enum do
   end
 
   @doc """
+  Splits the `enumerable` into groups based on `key_fun`.
+
+  The result is a map where each key is given by `key_fun`
+  and each value is a list of elements given by `value_fun`.
+  The order of elements within each list is preserved from the `enumerable`.
+  However, like all maps, the resulting map is unordered.
+
+  ## Examples
+
+      iex> Enum.group_by(~w{ant buffalo cat dingo}, &String.length/1)
+      %{3 => ["ant", "cat"], 5 => ["dingo"], 7 => ["buffalo"]}
+
+      iex> Enum.group_by(~w{ant buffalo cat dingo}, &String.length/1, &String.first/1)
+      %{3 => ["a", "c"], 5 => ["d"], 7 => ["b"]}
+
+  The key can be any Elixir value. For example, you may use a tuple
+  to group by multiple keys:
+
+      iex> collection = [
+      ...>   %{id: 1, lang: "Elixir", seq: 1},
+      ...>   %{id: 1, lang: "Java", seq: 1},
+      ...>   %{id: 1, lang: "Ruby", seq: 2},
+      ...>   %{id: 2, lang: "Python", seq: 1},
+      ...>   %{id: 2, lang: "C#", seq: 2},
+      ...>   %{id: 2, lang: "Haskell", seq: 2},
+      ...> ]
+      iex> Enum.group_by(collection, &{&1.id, &1.seq})
+      %{
+        {1, 1} => [%{id: 1, lang: "Elixir", seq: 1}, %{id: 1, lang: "Java", seq: 1}],
+        {1, 2} => [%{id: 1, lang: "Ruby", seq: 2}],
+        {2, 1} => [%{id: 2, lang: "Python", seq: 1}],
+        {2, 2} => [%{id: 2, lang: "C#", seq: 2}, %{id: 2, lang: "Haskell", seq: 2}]
+      }
+      iex> Enum.group_by(collection, &{&1.id, &1.seq}, &{&1.id, &1.lang})
+      %{
+        {1, 1} => [{1, "Elixir"}, {1, "Java"}],
+        {1, 2} => [{1, "Ruby"}],
+        {2, 1} => [{2, "Python"}],
+        {2, 2} => [{2, "C#"}, {2, "Haskell"}]
+      }
+
+  """
+  @spec group_by(t, (element -> any), (element -> any)) :: map
+  def group_by(enumerable, key_fun, value_fun \\ fn x -> x end)
+
+  def group_by(enumerable, key_fun, value_fun) when is_function(key_fun) do
+    reduce(reverse(enumerable), %{}, fn entry, acc ->
+      key = key_fun.(entry)
+      value = value_fun.(entry)
+
+      case acc do
+        %{^key => existing} -> %{acc | key => [value | existing]}
+        %{} -> Map.put(acc, key, [value])
+      end
+    end)
+  end
+
+  @doc """
   Invokes the given `fun` for each element in the `enumerable`.
 
   Returns `:ok`.
