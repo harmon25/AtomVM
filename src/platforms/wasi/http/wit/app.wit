@@ -1,0 +1,27 @@
+package atomvm:http;
+
+world app {
+  // Import all the standard WASI interfaces that the proxy world needs
+  import wasi:clocks/monotonic-clock@0.2.8;
+  import wasi:clocks/wall-clock@0.2.8;
+  import wasi:random/random@0.2.8;
+  import wasi:cli/stdout@0.2.8;
+  import wasi:cli/stderr@0.2.8;
+  import wasi:cli/stdin@0.2.8;
+  import wasi:http/types@0.2.8;
+
+  // Import outgoing-handler for making outbound HTTP requests from Erlang/Elixir
+  import wasi:http/outgoing-handler@0.2.8;
+
+  // Import Spin platform interfaces
+  import fermyon:spin/key-value@2.0.0;
+  import fermyon:spin/sqlite@2.0.0;
+  import fermyon:spin/rdbms-types@2.0.0;
+  import fermyon:spin/postgres@2.0.0;
+
+  // Import WASI config store (variables/secrets)
+  import wasi:config/store@0.2.0-draft-2024-09-27;
+
+  // Export the incoming-handler interface for Spin HTTP triggers
+  export wasi:http/incoming-handler@0.2.8;
+}

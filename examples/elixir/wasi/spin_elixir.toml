@@ -1,0 +1,20 @@
+spin_manifest_version = 2
+
+[application]
+name = "atomvm-elixir-http"
+version = "0.1.0"
+description = "Elixir HTTP handler running on AtomVM + Fermyon Spin"
+
+# All HTTP routes handled by AtomVM
+[[trigger.http]]
+route = "/..."
+component = "atomvm"
+
+[component.atomvm]
+# Path to the compiled AtomVM HTTP component
+source = "AtomVM_http.wasm"
+# Mount the .avm file into the WASI filesystem
+files = [{ source = "app.avm", destination = "/app.avm" }]
+# Enable Spin platform features
+key_value_stores = ["default"]
+allowed_outbound_hosts = ["https://*:*"]

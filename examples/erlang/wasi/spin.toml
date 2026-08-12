@@ -1,0 +1,20 @@
+spin_manifest_version = 2
+
+[application]
+name = "atomvm-http"
+version = "0.1.0"
+description = "AtomVM Erlang HTTP handler on Fermyon Spin"
+
+# HTTP trigger: all routes handled by AtomVM
+[[trigger.http]]
+route = "/..."
+component = "atomvm"
+
+[component.atomvm]
+# Path to the compiled AtomVM HTTP component
+source = "AtomVM_http.wasm"
+# Mount the .avm file into the WASI filesystem
+files = [{ source = "app.avm", destination = "/app.avm" }]
+# Enable Spin platform features
+key_value_stores = ["default"]
+allowed_outbound_hosts = ["https://*:*"]
